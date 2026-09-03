@@ -1,0 +1,66 @@
+#+title: Clean Slate HotStuff Implementation using Gorums
+#+author: Dany Gonzalez-Teigland
+#+language: en
+#+options: title:nil author:nil date:nil toc:nil H:4
+#+latex_class: uis-thesis
+#+latex_compiler: xelatex
+
+# Cover page and report metadata; see report-template/README.md for the
+# allowed values of each command.
+# Org drops amsmath/amssymb under xelatex, so load them here; amsmath
+# must precede the fontspec that uis-thesis pulls in.
+#+latex_header: \usepackage{amsmath}
+#+latex_header: \usepackage{amssymb}
+#+latex_header: \usepackage[english]{babel}
+#+latex_header: \usepackage{report-template/uis-thesis}
+#+latex_header: \graphicspath{{report-template/}{figures/}}
+#+latex_header: \newgeometry{margin=40mm}
+#+latex_header: \setstretch{1.2}
+#+latex_header: \authors{Dany Gonzalez-Teigland}
+#+latex_header: \department{ide}
+#+latex_header: \photo{photos/ide}
+#+latex_header: \photocredit{Hein Meling}
+#+latex_header: \reporttype{bachelor}
+#+latex_header: \specialization{cs}
+
+#+cite_export: biblatex
+#+bibliography: references.bib
+
+#+begin_export latex
+\uiscover{4}
+\frontmatter
+\pagestyle{empty}
+\declaration
+#+end_export
+
+#+include: "frontmatter/quote.org"
+#+include: "frontmatter/abstract.org"
+#+include: "frontmatter/ack.org"
+
+#+begin_export latex
+\tableofcontents
+\mainmatter
+#+end_export
+
+#+include: "chapters/intro.org"
+#+include: "chapters/related.org"
+#+include: "chapters/approach.org"
+#+include: "chapters/eval.org"
+#+include: "chapters/discussion.org"
+#+include: "chapters/conclusions.org"
+
+#+begin_export latex
+\appendix
+#+end_export
+
+# #+include: "appendices/instructions.org"
+
+#+begin_export latex
+\backmatter
+#+end_export
+
+#+print_bibliography:
+
+#+begin_export latex
+\uisbackcover
+#+end_export

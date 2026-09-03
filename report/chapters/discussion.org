@@ -1,0 +1,4 @@
+* Discussion
+:PROPERTIES:
+:CUSTOM_ID: ch:discussion
+:END:

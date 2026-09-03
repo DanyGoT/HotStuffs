@@ -1,0 +1,12 @@
+* Approach
+:PROPERTIES:
+:CUSTOM_ID: ch:approach
+:END:
+
+** Introduction
+
+** Existing Approaches/Baselines
+
+** Analysis
+
+** Proposed Solution

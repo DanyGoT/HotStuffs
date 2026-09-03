@@ -1,5 +1,0 @@
-#+title: Clean Slate HotStuff Implementation using Gorums
-#+AUTHOR: Dany Gonzalez-Teigland
-
-
-# TODO: add template

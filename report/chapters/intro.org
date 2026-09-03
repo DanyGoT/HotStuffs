@@ -1,0 +1,35 @@
+* Introduction
+:PROPERTIES:
+:CUSTOM_ID: ch:intro
+:END:
+
+Page budget for Introduction: 3-5 pages.
+
+** Background and Motivation
+:PROPERTIES:
+:CUSTOM_ID: sec:motivation
+:END:
+
+- Awaken the reader's interest and convince them why the theme is important.
+- Background information might be historical in nature, or it might refer to
+  previous research or practical considerations.
+- It should be written on a level that it's understandable by anyone with a
+  computer science bachelor's degree.
+
+** Objectives
+
+- Define the goals of your study.
+- It might be presented as a bullet list.
+
+** Approach and Contributions
+
+- Give a brief summary of your overall approach.
+- Summarize the specific contributions that you made in this thesis
+  (implementation, empirical results, analysis, etc.).
+- It might be presented as a bullet list.
+
+** Outline
+
+- Give an overview of the main points and the structure of your thesis.
+- Examples: "Chapter 2 covers ... Chapter 3 describes ..."
+- Show how the different parts (chapters) relate to each other.

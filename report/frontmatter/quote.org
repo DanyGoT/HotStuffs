@@ -1,0 +1,13 @@
+#+begin_export latex
+\vspace*{\fill}
+#+end_export
+
+#+begin_quote
+/Programming is a nice break from thinking./
+
+--- Leslie Lamport
+#+end_quote
+
+#+begin_export latex
+\vspace*{\fill}
+#+end_export
