@@ -1,1 +1,34 @@
 #+title: HotStuff
+
+
+
+
+
+
+https://typst.app/
+TikZ -> lage graf i latex
+https://www.overleaf.com/learn/latex/TikZ_package
+
+
+
+
+
+* Reading Materials / Related Work
+
+- [[1][Gorums paper]]
+- [[2][HotStuff: BFT Consensus in the Lens of Blockchain]] "Teori med implementasjon"
+- [[3][Relab HotStuff framework]]
+- [[4][Gorums source code]]
+- [[5][Making BFT Protocols Really Robust with Twins]] - "litt på siden, implementert i
+  relab hotstuffs" - Se på å potensielt porte fra relab hotstuffs til meg selv,
+  stretch goal.
+- [[6][DiemBFT v4: State Machine Replication in the Diem Blockchain]] -
+  "Implementasjon, se på denne som baseline?"
+-
+
+#+LINK: 1 https://ieeexplore.ieee.org/document/7980198
+#+LINK: 2 https://arxiv.org/abs/1803.05069
+#+LINK: 3 https://github.com/relab/hotstuff
+#+LINK: 4 https://github.com/relab/gorums
+#+LINK: 5 https://malkhi.com/posts/2020/04/making-BFT-systems-robust/
+#+LINK: 6 https://developers.diem.com/papers/diem-consensus-state-machine-replication-in-the-diem-blockchain/2021-08-17.pdf
