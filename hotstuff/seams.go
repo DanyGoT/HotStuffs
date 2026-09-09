@@ -17,8 +17,11 @@ type EventSink interface{ Push(Event) }
 type Transport interface {
 	// Propose sends to all replicas, this one included.
 	Propose(Proposal)
-	// Vote sends to a single replica, the leader of the next view.
-	Vote(to ID, cert PartialCert)
+	// Vote sends to all replicas, this one included. The paper unicasts a vote
+	// to the leader of the next view; that mapping stalls commits whenever a
+	// crashed replica is both a leader and the preceding view's collector, so
+	// every replica collects instead. See .claude/logs for the measurement.
+	Vote(PartialCert)
 	// Timeout sends to all replicas, this one included.
 	Timeout(TimeoutMsg)
 	// Fetch asks the configuration for a block by hash. The answer arrives as
