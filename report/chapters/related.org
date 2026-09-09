@@ -1,3 +1,5 @@
+#+bibliography: ../references.bib
+
 * Related Work
 :PROPERTIES:
 :CUSTOM_ID: ch:related
@@ -5,6 +7,20 @@
 
 
 
+
+
+* Diem
+
+[cite:@Team2021DiemBFTVS;]
+DiemBFT commits blocks in two steps, and uses a quadratic view-change of failed
+leaders.
+Diem Blockchain was created to enable a simple global currency and financial
+infastructure for billions of people.
+The Diem Blockhain uses the consensus porotocl called DiemBFT for blockchain
+transactions.
+DiemBFT builds on a classic BFT approach
+DiemBFT is a hybrid between Hotstuff in common-case execution, and PBFT in
+faulty leader execution.
 
 
 
