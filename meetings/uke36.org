@@ -1,0 +1,82 @@
+#+title: Uke36
+
+* Meeting: 03.09.2026
+
+- Attendees: Dany, Alexander, Hein
+
+** Progress Update
+
+- Coding
+  -
+- Writing
+  -
+- Reading
+  - Trying to read and internalize HotStuff paper
+- Admin
+  -
+- Other
+  - Finished exam!
+
+** Questions
+
+-
+-
+
+** Discussion Notes
+
+- Skrive noen sider om related work: Hotstuff i gorums
+- Skrive noen sider om bakgrunn: Hotstuff, BFTS, Gorums
+- Bør sjekke litt selv om andre implementasjoner av hotstuff for
+  sammenligningsforslag
+  - Noen har forket relab hotstuff - Potensiale?
+  - Hotstuff C++ implementasjon?
+  -
+- Sette opp relab sin hotstuff lokalt, brukes som baseline
+- Diems prosjekt som en template/baseline(?)
+- Skrive noe kode?
+- Prioriteringer i prosjektet: 1. Ryddigere, 2. Mer effektiv. Rapport!
+  DRY KISS Clean Code
+- Lese Diems før Hotstuff
+- Skrive om min implementasjon vs andre sin implementasjon.
+  - Hvilke valg som er gjort annerledes
+- I rapporten, hold bakgrunnstingene konsis/ikke ha med.
+  - Baser rapportene på annen litteratur.
+  - Implementasjonsfokusert
+  - Forskningsrettet rettet mot å analysere og å finne ut om dette er en god
+    implementajsjon i forhold til relab/andre prosjekter.
+  - Hotstuff paper "An Extensible Framework for Implementing and Validating
+    Byzantine Fault-Tolerant Protocols", min rapport skal være lignende denne
+
+  
+** Action Items
+
+*** Lesing
+- [ ] Les DiemBFT v4 først, deretter HotStuff-paperet på nytt
+- [ ] Les "An Extensible Framework for Implementing and Validating
+  Byzantine Fault-Tolerant Protocols" — brukes som mal for rapportformen
+- [ ] Les Gorums-paperet
+- [ ] Skum "Making BFT Protocols Really Robust with Twins" (stretch goal:
+  porte Twins fra relab/hotstuff)
+
+*** Kartlegging av andre implementasjoner
+- [ ] Finn og vurder andre HotStuff-implementasjoner for sammenligning
+  - [ ] Relab hotstuff
+  - [ ] Forks av relab/hotstuff
+  - [ ] C++-implementasjon(er)
+- [ ] Vurder DiemBFT som template/baseline for egen implementasjon
+
+*** Kode
+- [ ] Sett opp relab/hotstuff lokalt og få det til å kjøre — baseline
+- [ ] Kom i gang med kode: skjelett i Go med Gorums + protobuf
+  - Prioritering: 1) ryddigere, 2) mer effektiv. DRY, KISS, clean code
+
+*** Skriving
+- [ ] Related work: noen sider om HotStuff i Gorums
+- [ ] Bakgrunn: HotStuff, BFT, Gorums — hold konsist, baser på litteraturen
+- [ ] Skisser kapittel: egen implementasjon vs. andres, hvilke valg som er
+  gjort annerledes og hvorfor
+- [ ] Hold rapporten implementasjonsfokusert og forskningsrettet: er dette en
+  god implementasjon sammenlignet med relab/andre?
+
+*** Verktøy / Admin
+- [ ] Bestem verktøy for figurer og grafer: Typst vs. LaTeX/TikZ
