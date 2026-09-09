@@ -30,7 +30,8 @@ race:
 
 # The dependency direction, enforced mechanically rather than by discipline.
 check-deps:
-	@! go list -f '{{join .Deps "\n"}}' ./hotstuff | grep -q '\.'
+	@# a dot in the first path element means a domain, i.e. not stdlib
+	@! go list -f '{{join .Deps "\n"}}' ./hotstuff | grep -q '^[^/]*\.'
 	@! grep -rq --include='*.go' 'hotstuffpb\|relab/gorums' $(wildcard hotstuff crypto blockchain consensus) /dev/null
 	@! grep -rEq --include='*.go' '^[[:space:]]*go ' $(wildcard hotstuff consensus) /dev/null
 	@! grep -rq --include='*.go' 'reflect\.' $(wildcard $(GO_DIRS)) /dev/null
