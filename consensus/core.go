@@ -3,6 +3,7 @@ package consensus
 import (
 	"cmp"
 	"slices"
+	"time"
 
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 )
@@ -21,6 +22,12 @@ type Config struct {
 	Commands  hotstuff.CommandQueue
 	Executor  hotstuff.Executor
 	Sink      hotstuff.EventSink
+
+	// Observer, if set, is called after every event with the state it produced
+	// and how long Step took. It is the only hook the core exposes, and it is
+	// enough: every protocol-level counter is a delta on that snapshot, so
+	// instrumentation needs no wrapper around the state machine.
+	Observer func(hotstuff.Event, hotstuff.State, time.Duration)
 }
 
 // voteSet accumulates the votes for one block. The view is kept alongside so
@@ -38,16 +45,17 @@ type Core struct {
 	id     hotstuff.ID
 	quorum int
 
-	rules  hotstuff.Rules
-	store  hotstuff.BlockStore
-	crypto hotstuff.Crypto
-	net    hotstuff.Transport
-	leader hotstuff.LeaderRotation
-	clock  hotstuff.Clock
-	dur    hotstuff.ViewDuration
-	cmds   hotstuff.CommandQueue
-	exec   hotstuff.Executor
-	sink   hotstuff.EventSink
+	rules   hotstuff.Rules
+	store   hotstuff.BlockStore
+	crypto  hotstuff.Crypto
+	net     hotstuff.Transport
+	leader  hotstuff.LeaderRotation
+	clock   hotstuff.Clock
+	dur     hotstuff.ViewDuration
+	cmds    hotstuff.CommandQueue
+	exec    hotstuff.Executor
+	sink    hotstuff.EventSink
+	observe func(hotstuff.Event, hotstuff.State, time.Duration)
 
 	view          hotstuff.View
 	lastVotedView hotstuff.View
@@ -79,6 +87,7 @@ func New(cfg Config) *Core {
 		cmds:          cfg.Commands,
 		exec:          cfg.Executor,
 		sink:          cfg.Sink,
+		observe:       cfg.Observer,
 		committedHash: hotstuff.GenesisHash(),
 		highQC:        hotstuff.QuorumCert{BlockHash: hotstuff.GenesisHash()},
 		votes:         map[hotstuff.Hash]voteSet{},
@@ -112,6 +121,10 @@ func (c *Core) State() hotstuff.State {
 // Step is the whole protocol surface. The event set is sealed, so this switch
 // is exhaustive and needs no default.
 func (c *Core) Step(e hotstuff.Event) {
+	if c.observe != nil {
+		start := c.clock.Now()
+		defer func() { c.observe(e, c.State(), c.clock.Now().Sub(start)) }()
+	}
 	switch e := e.(type) {
 	case hotstuff.ProposeEvent:
 		c.onPropose(e)

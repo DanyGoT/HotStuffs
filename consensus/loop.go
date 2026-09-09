@@ -2,6 +2,7 @@ package consensus
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 )
@@ -12,10 +13,25 @@ import (
 type Loop struct {
 	core *Core
 	q    hotstuff.Queue
+	high atomic.Int64
 }
 
 // NewLoop pairs a core with the queue it was constructed against.
 func NewLoop(c *Core, q hotstuff.Queue) *Loop { return &Loop{core: c, q: q} }
+
+// step records how deep the queue was, then runs the event. The high-water
+// mark is written only from this goroutine and read from any, which is all the
+// atomic is for.
+func (l *Loop) step(e hotstuff.Event) {
+	if n := int64(len(l.q)); n > l.high.Load() {
+		l.high.Store(n)
+	}
+	l.core.Step(e)
+}
+
+// QueueHighWater is the deepest the inbound queue has been seen: the number
+// that says whether inbound backpressure was ever felt.
+func (l *Loop) QueueHighWater() int { return int(l.high.Load()) }
 
 // Push enqueues an event from any goroutine, blocking when the queue is full.
 // Inbound backpressure is deliberate: dropping an already-accepted event is
@@ -26,7 +42,7 @@ func (l *Loop) Push(e hotstuff.Event) { l.q.Push(e) }
 func (l *Loop) Tick() bool {
 	select {
 	case e := <-l.q:
-		l.core.Step(e)
+		l.step(e)
 		return true
 	default:
 		return false
@@ -42,7 +58,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case e := <-l.q:
-			l.core.Step(e)
+			l.step(e)
 		}
 	}
 }
