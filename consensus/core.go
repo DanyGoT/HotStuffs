@@ -30,6 +30,14 @@ type Config struct {
 	Observer func(hotstuff.Event, hotstuff.State, time.Duration)
 }
 
+// fetchRetryViews is how many views a gap stays marked in-flight before it may
+// be asked for again. A failed backfill reports nothing — a call error, a
+// decode error and a wrong block all answer with silence — so the view number
+// is the only clock this recovery has. Four covers the default fetch timeout
+// at the default view duration, and asking twice would only cost a duplicate
+// answer in any case: the responder serves it from its store, by hash.
+const fetchRetryViews = 4
+
 // voteKey buckets votes by the exact thing their signatures cover. Keying by
 // block hash alone would let a vote claiming a different view for the same
 // block join an honest quorum, and the certificate that formed would carry
@@ -69,8 +77,8 @@ type Core struct {
 
 	votes    map[voteKey][]hotstuff.Signature
 	timeouts map[hotstuff.View][]hotstuff.Signature
-	fetching map[hotstuff.Hash]struct{}
-	pending  *hotstuff.Block // block whose commit check is waiting on a fetch
+	fetching map[hotstuff.Hash]hotstuff.View // gap hash to the view its request went out in
+	pending  *hotstuff.Block                 // block whose commit check is waiting on a fetch
 
 	timer hotstuff.Timer
 }
@@ -95,7 +103,7 @@ func New(cfg Config) *Core {
 		highQC:        hotstuff.QuorumCert{BlockHash: hotstuff.GenesisHash()},
 		votes:         map[voteKey][]hotstuff.Signature{},
 		timeouts:      map[hotstuff.View][]hotstuff.Signature{},
-		fetching:      map[hotstuff.Hash]struct{}{},
+		fetching:      map[hotstuff.Hash]hotstuff.View{},
 	}
 }
 
@@ -279,10 +287,12 @@ func (c *Core) execute(target *hotstuff.Block) bool {
 }
 
 func (c *Core) fetch(h hotstuff.Hash) {
-	if _, ok := c.fetching[h]; ok {
-		return // at most one in-flight fetch per hash
+	// At most one in-flight fetch per hash, until the view has moved far
+	// enough that no answer is coming.
+	if at, ok := c.fetching[h]; ok && c.view < at+fetchRetryViews {
+		return
 	}
-	c.fetching[h] = struct{}{}
+	c.fetching[h] = c.view
 	c.net.Fetch(h)
 }
 
