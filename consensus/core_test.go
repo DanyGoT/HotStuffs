@@ -527,6 +527,52 @@ func TestSecondGapFetchesAgain(t *testing.T) {
 	}
 }
 
+// TestUnansweredFetchIsRetried pins the recovery behind a failed backfill:
+// nothing answers the first request, and the gap is asked for again once the
+// view has moved on far enough that no answer can still be in flight.
+func TestUnansweredFetchIsRetried(t *testing.T) {
+	h := newHarness(t, 1, 4)
+	h.core.Start()
+
+	blocks := buildChain(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	for _, b := range blocks[1:] { // b1 withheld, and no responder ever has it
+		h.store.Put(b)
+	}
+	b1 := blocks[0]
+
+	h.core.view = 4
+	h.core.Step(hotstuff.ProposeEvent{Proposal: hotstuff.Proposal{Block: blocks[3]}})
+	if len(h.tr.Fetches) != 1 || h.tr.Fetches[0] != b1.Hash() {
+		t.Fatalf("Fetches = %x, want one request for %x", h.tr.Fetches, b1.Hash())
+	}
+	issuedAt := h.core.fetching[b1.Hash()]
+
+	// Every later proposal re-runs the commit check and finds the same gap,
+	// but the request may not repeat before the retry threshold.
+	for _, b := range blocks[4:] {
+		at := h.core.State().View
+		h.core.Step(hotstuff.ProposeEvent{Proposal: hotstuff.Proposal{Block: b}})
+		if len(h.tr.Fetches) > 1 {
+			if at < issuedAt+fetchRetryViews {
+				t.Fatalf("gap re-requested at view %d, want no earlier than %d", at, issuedAt+fetchRetryViews)
+			}
+			break
+		}
+	}
+	if len(h.tr.Fetches) != 2 || h.tr.Fetches[1] != b1.Hash() {
+		t.Fatalf("Fetches = %x, want the unanswered gap re-requested", h.tr.Fetches)
+	}
+
+	// The parked commit still completes the moment a responder finally has it.
+	h.core.Step(hotstuff.FetchedEvent{Block: b1})
+	if h.log.Len() == 0 {
+		t.Error("commit log is empty, want the parked commit to complete once the gap filled")
+	}
+	if got := h.core.State().CommittedView; got == 0 {
+		t.Error("CommittedView = 0, want the completed commit to have moved it")
+	}
+}
+
 // --- Pruning ---
 
 func TestAccumulatorsStayBounded(t *testing.T) {

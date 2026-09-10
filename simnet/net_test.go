@@ -382,3 +382,34 @@ func TestDropPredicateSkipsSelectedDeliveries(t *testing.T) {
 	}
 	nt.CheckSafety(t)
 }
+
+// TestDroppedFetchesRecoverOnceAnswered is the end-to-end half of the fetch
+// retry: an isolated replica falls behind, every backfill request it makes
+// while catching up is dropped, and it still catches up once they are
+// answered again — which it can only do by asking a second time.
+func TestDroppedFetchesRecoverOnceAnswered(t *testing.T) {
+	nt := New(t, 4, WithSeed(1), WithViewDuration(10*time.Millisecond))
+	nt.Drop(func(d Delivery) bool { return d.Event == nil }) // every backfill request
+
+	majority := []int{0, 1, 2}
+	nt.Partition(majority, []int{3})
+	if !nt.RunUntil(func() bool { return minLogOf(nt, majority...) >= 3 }, 20000) {
+		t.Fatalf("majority side stalled, minLog=%d", minLogOf(nt, majority...))
+	}
+
+	nt.Heal()
+	nt.RunUntil(func() bool { return false }, 2000)
+	if got := len(nt.Log(3)); got != 0 {
+		t.Fatalf("isolated replica committed %d entries with every backfill dropped, want 0", got)
+	}
+
+	nt.Drop(nil)
+	target := minLogOf(nt, majority...)
+	if !nt.RunUntil(func() bool { return len(nt.Log(3)) >= target }, 20000) {
+		t.Fatalf("replica never re-requested its gap: log has %d entries, want >= %d", len(nt.Log(3)), target)
+	}
+	if !prefixEqual(nt.Log(0), nt.Log(3)) {
+		t.Error("backfilled replica disagrees with replica 0 over their common prefix")
+	}
+	nt.CheckSafety(t)
+}
