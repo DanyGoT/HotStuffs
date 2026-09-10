@@ -72,8 +72,11 @@ func (c *Core) prune() {
 			delete(c.timeouts, v)
 		}
 	}
-	for h := range c.fetching {
-		if _, ok := c.store.Get(h); ok {
+	// A gap that arrived needs no request, and one whose retry window has run
+	// out is dead weight: the next commit check re-issues it if it still
+	// matters. Either way the in-flight set is bounded.
+	for h, at := range c.fetching {
+		if _, ok := c.store.Get(h); ok || c.view >= at+fetchRetryViews {
 			delete(c.fetching, h)
 		}
 	}
