@@ -68,6 +68,11 @@ func (c *Core) prune() {
 			delete(c.votes, k)
 		}
 	}
+	for k := range c.voters {
+		if k.view <= c.highQC.View {
+			delete(c.voters, k)
+		}
+	}
 	for v := range c.timeouts {
 		if v < c.view {
 			delete(c.timeouts, v)

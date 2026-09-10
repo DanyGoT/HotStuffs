@@ -399,17 +399,38 @@ func TestVotesForDifferentBlocksDoNotMix(t *testing.T) {
 
 	var a, b hotstuff.Hash
 	a[0], b[0] = 0x0A, 0x0B
-	// quorum(4) - 1 = 2 votes for each of two competing blocks in view 1.
+	// quorum(4) - 1 = 2 votes for each of two competing blocks in view 1,
+	// from disjoint signers: nobody votes twice in a view.
 	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 1, 1, a)})
 	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 2, 1, a)})
-	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 1, 1, b)})
-	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 2, 1, b)})
+	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 3, 1, b)})
+	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 4, 1, b)})
 
 	if got := h.core.State().View; got != 1 {
 		t.Fatalf("View = %d, want still 1", got)
 	}
 	if n := len(h.core.votes); n != 2 {
 		t.Errorf("votes has %d entries, want 2 separate blocks", n)
+	}
+}
+
+func TestSignerVotesOncePerView(t *testing.T) {
+	h := newHarness(t, 1, 4)
+	h.core.Start()
+
+	var a, b hotstuff.Hash
+	a[0], b[0] = 0x0A, 0x0B
+	// An honest replica votes at most once per view, so a faulty one that
+	// equivocates buys nothing — and opens no second bucket, which is what
+	// keeps the accumulator bounded against fabricated block hashes.
+	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 2, 1, a)})
+	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 2, 1, b)})
+
+	if n := len(h.core.votes); n != 1 {
+		t.Errorf("votes has %d entries, want 1: a signer's second vote in a view is ignored", n)
+	}
+	if n := len(h.core.votes[voteKey{view: 1, hash: a}]); n != 1 {
+		t.Errorf("the first bucket holds %d signatures, want 1", n)
 	}
 }
 
@@ -673,5 +694,54 @@ func TestAccumulatorsStayBounded(t *testing.T) {
 	}
 	if n := len(h.core.fetching); n >= 5 {
 		t.Errorf("fetching has %d entries, want < 5", n)
+	}
+
+	// The same bound has to hold against a sender following no protocol at
+	// all: a flood of votes and timeouts for far-off views, each naming a
+	// block nobody proposed. Every one passes edge verification, which is
+	// state-free by design and never sees a view.
+	const junk = 20_000
+	votes, timeouts := len(h.core.votes), len(h.core.timeouts)
+	for i := range junk {
+		v := hotstuff.View(1_000_000 + i)
+		var bh hotstuff.Hash
+		bh[0], bh[1], bh[2] = byte(i), byte(i>>8), byte(i>>16)
+		h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 3, v, bh)})
+		h.core.Step(hotstuff.TimeoutEvent{TimeoutMsg: h.timeoutFrom(t, 3, v, h.core.State().HighQC)})
+	}
+	if n := len(h.core.votes); n != votes {
+		t.Errorf("votes grew from %d to %d entries under %d junk votes", votes, n, junk)
+	}
+	if n := len(h.core.timeouts); n != timeouts {
+		t.Errorf("timeouts grew from %d to %d entries under %d junk timeouts", timeouts, n, junk)
+	}
+	if n := len(h.core.voters); n >= 5 {
+		t.Errorf("voters has %d entries, want < 5", n)
+	}
+}
+
+// TestFarFutureTimeoutStillCatchesUp checks that bounding the accumulators
+// left the catch-up path alone: a timeout's QC is adopted however far ahead
+// the timeout itself is, which is how a lagging replica learns the chain has
+// moved on without any NewView message in the protocol.
+func TestFarFutureTimeoutStillCatchesUp(t *testing.T) {
+	h := newHarness(t, 1, 4)
+	h.core.Start()
+
+	var bh hotstuff.Hash
+	bh[0] = 0x11
+	qc := h.qcFor(t, 500, bh)
+	h.core.Step(hotstuff.TimeoutEvent{TimeoutMsg: h.timeoutFrom(t, 2, 501, qc)})
+
+	if got := h.core.State().HighQC.View; got != 500 {
+		t.Errorf("HighQC.View = %d, want 500: a timeout's QC is adopted however far ahead it is", got)
+	}
+	if n := len(h.core.timeouts); n != 0 {
+		t.Errorf("timeouts has %d entries, want 0: the signature itself is far past the lead bound", n)
+	}
+	// And the QC it brought is enough to enter the view it certifies.
+	h.core.Step(hotstuff.ProposeEvent{Proposal: h.proposalFor(t, 501, qc, nil, nil)})
+	if got := h.core.State().View; got != 501 {
+		t.Errorf("View = %d, want 501", got)
 	}
 }
