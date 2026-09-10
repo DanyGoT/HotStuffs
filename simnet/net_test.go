@@ -278,13 +278,16 @@ func TestPartitionWithQuorumKeepsGoing(t *testing.T) {
 	nt.CheckSafety(t)
 }
 
+// sweepSeeds is how many seeded schedules TestSeededPartitionSweep explores.
+const sweepSeeds = 500
+
 // TestSeededPartitionSweep is the highest value-per-line test in this suite:
-// a hundred seeded schedules, each run through a partition and a heal, all
+// hundreds of seeded schedules, each run through a partition and a heal, all
 // checked against the safety oracle. A failure names its seed, so it
 // reproduces from one number.
 func TestSeededPartitionSweep(t *testing.T) {
 	progressed := 0
-	for seed := int64(1); seed <= 100; seed++ {
+	for seed := int64(1); seed <= sweepSeeds; seed++ {
 		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) {
 			nt := New(t, 4, WithSeed(seed), WithViewDuration(10*time.Millisecond))
 			before := minLog(nt)
@@ -311,8 +314,8 @@ func TestSeededPartitionSweep(t *testing.T) {
 			}
 		})
 	}
-	if progressed < 50 {
-		t.Errorf("only %d/100 seeds made any progress, want most of them to", progressed)
+	if progressed < sweepSeeds/2 {
+		t.Errorf("only %d/%d seeds made any progress, want most of them to", progressed, sweepSeeds)
 	}
 }
 
@@ -410,6 +413,62 @@ func TestDroppedFetchesRecoverOnceAnswered(t *testing.T) {
 	}
 	if !prefixEqual(nt.Log(0), nt.Log(3)) {
 		t.Error("backfilled replica disagrees with replica 0 over their common prefix")
+	}
+	nt.CheckSafety(t)
+}
+
+// TestNoReplicaVotesWithoutTheCertifiedParent is the cluster-level form of the
+// lock invariant. Replica 4 misses exactly one block and every backfill it
+// asks for is dropped, so its gap stays open for the whole run. It must then
+// never vote for a block whose QC certifies what it does not hold: such a vote
+// helps certify a 3-chain while its own lock stays behind, which is the one
+// case the chain's safety argument assumes away.
+func TestNoReplicaVotesWithoutTheCertifiedParent(t *testing.T) {
+	const victim = 3 // not the leader of view 2, so it cannot hold that block
+	nt := New(t, 4, WithSeed(1), WithViewDuration(10*time.Millisecond))
+
+	var missed hotstuff.Hash
+	var votes []hotstuff.PartialCert
+	nt.Drop(func(d Delivery) bool {
+		if d.From == victim {
+			if v, ok := d.Event.(hotstuff.VoteEvent); ok && d.To == victim {
+				votes = append(votes, v.PartialCert) // one copy of each broadcast
+			}
+			if d.Event == nil {
+				return true // no backfill, so the gap never closes
+			}
+		}
+		p, ok := d.Event.(hotstuff.ProposeEvent)
+		if ok && d.To == victim && p.Block.View() == 2 {
+			missed = p.Block.Hash()
+			return true
+		}
+		return false
+	})
+
+	rest := []int{0, 1, 2}
+	if !nt.RunUntil(func() bool { return minLogOf(nt, rest...) >= 5 }, 20000) {
+		t.Fatalf("the other three stalled, minLog=%d", minLogOf(nt, rest...))
+	}
+
+	if missed == (hotstuff.Hash{}) {
+		t.Fatal("no view-2 proposal was ever delivered, so nothing was dropped")
+	}
+	if _, ok := nt.replicas[victim].store.Get(missed); ok {
+		t.Fatalf("replica %d holds the block dropped from it, so the gap closed", nt.ID(victim))
+	}
+	if len(votes) < 3 {
+		t.Fatalf("replica %d cast %d votes, too few for this to say anything", nt.ID(victim), len(votes))
+	}
+	for _, v := range votes {
+		b, ok := nt.replicas[victim].store.Get(v.BlockHash)
+		if !ok {
+			t.Fatalf("replica %d voted for a block it does not hold: %x", nt.ID(victim), v.BlockHash[:4])
+		}
+		if _, ok := nt.replicas[victim].store.Get(b.QC().BlockHash); !ok {
+			t.Fatalf("replica %d voted for the block at view %d without ever holding the one its QC certifies",
+				nt.ID(victim), b.View())
+		}
 	}
 	nt.CheckSafety(t)
 }

@@ -24,9 +24,9 @@ func chain(views ...hotstuff.View) []*hotstuff.Block {
 }
 
 func TestVoteRule(t *testing.T) {
-	// VoteRule reads only the proposal's view and its QC's view, never the
-	// store: voting never walks the chain, which is what keeps a lagging
-	// replica live.
+	// Every case below certifies genesis, which the store always holds, so
+	// the table isolates the view arithmetic; the absent-parent branch is
+	// checked on its own afterwards.
 	tests := []struct {
 		name          string
 		lastVotedView hotstuff.View
@@ -58,6 +58,17 @@ func TestVoteRule(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("certified block absent", func(t *testing.T) {
+		var missing hotstuff.Hash
+		missing[0] = 0x42
+		qc := hotstuff.QuorumCert{View: 3, BlockHash: missing}
+		b := hotstuff.NewBlock(missing, 5, 1, qc, nil)
+		s := hotstuff.State{LastVotedView: 4, LockedView: 2}
+		if r.VoteRule(s, hotstuff.Proposal{Block: b}) {
+			t.Error("VoteRule() = true, want false: a lock cannot be raised to a block the store lacks")
+		}
+	})
 }
 
 func TestCommitRule(t *testing.T) {

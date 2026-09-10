@@ -121,6 +121,29 @@ func (h *harness) assertHighQCVerifies(t *testing.T) {
 	}
 }
 
+// assertLockCoversLastVote pins the invariant behind the 3-chain's safety
+// argument: a replica that voted for a block holds the block that block's QC
+// certifies, and its lock is at least that block's own QC view — the
+// grandparent whose certification the vote helps complete. The paper's lock is
+// monotone, so it may already stand higher.
+func (h *harness) assertLockCoversLastVote(t *testing.T) {
+	t.Helper()
+	if len(h.tr.Votes) == 0 {
+		t.Fatal("no vote to check the lock against")
+	}
+	voted, ok := h.store.Get(h.tr.Votes[len(h.tr.Votes)-1].BlockHash)
+	if !ok {
+		t.Fatal("voted for a block the store does not hold")
+	}
+	parent, ok := h.store.Get(voted.QC().BlockHash)
+	if !ok {
+		t.Fatalf("voted for the block at view %d without holding the block its QC certifies", voted.View())
+	}
+	if got, want := h.core.State().LockedView, parent.QC().View; got < want {
+		t.Fatalf("LockedView = %d after voting for the block at view %d, want at least its grandparent's view %d", got, voted.View(), want)
+	}
+}
+
 // buildChain returns blocks for the given views, each extending the previous
 // and carrying a QC for it, rooted at genesis. Proposer 1 throughout: the
 // tests using it only ever inspect the commit/fetch path, never leadership.
@@ -167,6 +190,7 @@ func driveChain(t *testing.T, h *harness, upTo hotstuff.View) []*hotstuff.Block 
 		h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 3, v, bh)})
 
 		h.assertHighQCVerifies(t)
+		h.assertLockCoversLastVote(t)
 		qc = hotstuff.QuorumCert{View: v, BlockHash: bh}
 	}
 	return blocks
@@ -449,19 +473,63 @@ func TestLockUpdatesTwoCertsBack(t *testing.T) {
 	}
 }
 
-func TestLockDoesNotMoveWhenCertifiedBlockAbsent(t *testing.T) {
+// TestAbsentCertifiedBlockBlocksTheVote is the inverse of what this test used
+// to pin. The lock cannot be raised to a block the store lacks, so the vote
+// that would help certify the proposal must not be cast either: casting it
+// would put this replica in a certifying quorum with a stale lock.
+func TestAbsentCertifiedBlockBlocksTheVote(t *testing.T) {
 	h := newHarness(t, 1, 4)
 	h.core.Start()
 
 	var missing hotstuff.Hash
 	missing[0] = 0x77
 	badQC := hotstuff.QuorumCert{View: 1, BlockHash: missing} // never stored
-	block := hotstuff.NewBlock(missing, 1, 2, badQC, nil)
+	block := hotstuff.NewBlock(missing, 2, 3, badQC, nil)
 
 	h.core.Step(hotstuff.ProposeEvent{Proposal: hotstuff.Proposal{Block: block}})
 
+	if n := len(h.tr.Votes); n != 0 {
+		t.Errorf("Votes = %d, want 0", n)
+	}
 	if got := h.core.State().LockedView; got != 0 {
 		t.Errorf("LockedView = %d, want unchanged 0", got)
+	}
+}
+
+// TestGapSkipsOneVoteThenResumes is the liveness cost of that rule, made
+// explicit: a replica that missed a block cannot vote for the proposal
+// certifying it, asks for it, and is voting again by the next view.
+func TestGapSkipsOneVoteThenResumes(t *testing.T) {
+	h := newHarness(t, 1, 4)
+	h.core.Start()
+
+	blocks := buildChain(1, 2, 3, 4)
+	b2, b3, b4 := blocks[1], blocks[2], blocks[3]
+
+	h.core.Step(hotstuff.ProposeEvent{Proposal: hotstuff.Proposal{Block: blocks[0]}})
+	h.assertLockCoversLastVote(t)
+
+	// b2 never arrives, so b3 certifies a block this replica does not hold.
+	votes := len(h.tr.Votes)
+	h.core.Step(hotstuff.ProposeEvent{Proposal: hotstuff.Proposal{Block: b3}})
+	if len(h.tr.Votes) != votes {
+		t.Fatal("voted for a block whose certified parent is absent")
+	}
+	if got := h.core.State().LockedView; got != 0 {
+		t.Errorf("LockedView = %d, want 0: the lock could not move, which is why the vote was skipped", got)
+	}
+	if len(h.tr.Fetches) == 0 || h.tr.Fetches[0] != b2.Hash() {
+		t.Fatalf("Fetches = %x, want a request for the missing %x", h.tr.Fetches, b2.Hash())
+	}
+
+	h.core.Step(hotstuff.FetchedEvent{Block: b2})
+	h.core.Step(hotstuff.ProposeEvent{Proposal: hotstuff.Proposal{Block: b4}})
+	if len(h.tr.Votes) != votes+1 {
+		t.Fatalf("Votes = %d, want the replica voting again in the next view", len(h.tr.Votes))
+	}
+	h.assertLockCoversLastVote(t)
+	if got := h.core.State().LockedView; got != 2 {
+		t.Errorf("LockedView = %d, want 2: b4's QC certifies b3, whose QC certifies b2", got)
 	}
 }
 
