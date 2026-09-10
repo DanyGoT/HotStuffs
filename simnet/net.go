@@ -57,6 +57,7 @@ const (
 	kVote
 	kTimeout
 	kFetch
+	kInject
 )
 
 func (k kind) String() string {
@@ -67,15 +68,17 @@ func (k kind) String() string {
 		return "vote"
 	case kTimeout:
 		return "timeout"
+	case kInject:
+		return "inject"
 	default:
 		return "fetch"
 	}
 }
 
 // scheduled is one pending item on the Net's schedule: one recipient of a
-// one-way message (event set, kind is kProposal/kVote/kTimeout), or a fetch
-// request (hash set, kind is kFetch, to unused). A broadcast becomes one item
-// per recipient, so a seeded schedule interleaves recipients as well as
+// one-way message (event set, kind is kProposal/kVote/kTimeout/kInject), or a
+// fetch request (hash set, kind is kFetch, to is -1). A broadcast becomes one
+// item per recipient, so a seeded schedule interleaves recipients as well as
 // messages. Reachability is evaluated at delivery, not here, so a Partition
 // call between send and delivery still takes effect.
 type scheduled struct {
@@ -84,6 +87,15 @@ type scheduled struct {
 	kind  kind
 	event hotstuff.Event
 	hash  hotstuff.Hash
+}
+
+// Delivery is one pending delivery as a Drop predicate sees it: Event, from
+// replica From to replica To; or, with Event nil and To -1, the backfill
+// request From issued for Hash, which has no single recipient.
+type Delivery struct {
+	From, To int
+	Event    hotstuff.Event
+	Hash     hotstuff.Hash
 }
 
 // replica is one node in the simulated network, addressed by index; its
@@ -106,6 +118,7 @@ type Net struct {
 	schedule     []scheduled
 	rng          *rand.Rand
 	partitions   [][]int
+	drop         func(Delivery) bool
 	trace        []string
 	step         int
 	viewDuration time.Duration
@@ -135,7 +148,7 @@ func (rt *transport) Timeout(m hotstuff.TimeoutMsg) {
 	rt.broadcast(kTimeout, hotstuff.TimeoutEvent{TimeoutMsg: m})
 }
 func (rt *transport) Fetch(h hotstuff.Hash) {
-	rt.net.schedule = append(rt.net.schedule, scheduled{from: rt.from, kind: kFetch, hash: h})
+	rt.net.schedule = append(rt.net.schedule, scheduled{from: rt.from, to: -1, kind: kFetch, hash: h})
 }
 
 var _ hotstuff.Transport = (*transport)(nil)
@@ -260,6 +273,20 @@ func (nt *Net) Partition(sets ...[]int) { nt.partitions = sets }
 // Heal removes every partition.
 func (nt *Net) Heal() { nt.partitions = nil }
 
+// Drop installs a predicate consulted for every delivery; returning true
+// discards that one. It is how a test says "replica 3 misses exactly this
+// block", which Partition is far too blunt to express. A nil pred clears it.
+func (nt *Net) Drop(pred func(Delivery) bool) { nt.drop = pred }
+
+// Inject schedules e from replica "from" to replica "to" outside any replica's
+// transport, which is the only way this harness produces a message an honest
+// core would never send. Unlike scheduled traffic it is not asserted to
+// verify: an injected message the receiver rejects is dropped, exactly as a
+// real handler drops it.
+func (nt *Net) Inject(from, to int, e hotstuff.Event) {
+	nt.schedule = append(nt.schedule, scheduled{from: from, to: to, kind: kInject, event: e})
+}
+
 // Log is replica idx's committed blocks, in commit order.
 func (nt *Net) Log(idx int) []*hotstuff.Block { return nt.replicas[idx].log.Snapshot() }
 
@@ -298,35 +325,41 @@ func (nt *Net) pop() (scheduled, bool) {
 }
 
 // deliverOne delivers one scheduled item, skipping it entirely if its sender
-// had since crashed.
+// had since crashed or the Drop predicate rejects it.
 func (nt *Net) deliverOne(m scheduled) {
 	if nt.replicas[m.from].crashed {
+		return
+	}
+	if nt.drop != nil && nt.drop(Delivery{From: m.from, To: m.to, Event: m.event, Hash: m.hash}) {
 		return
 	}
 	if m.kind == kFetch {
 		nt.deliverFetch(m.from, m.hash)
 		return
 	}
-	nt.push(m.from, m.to, m.event, m.kind.String())
+	nt.push(m)
 }
 
-// push delivers e from replica "from" to replica "to", verifying at the edge
-// exactly as a real handler would. A message this harness built must always
-// verify; a failure here is a real bug, not a scenario.
-func (nt *Net) push(from, to int, e hotstuff.Event, label string) {
-	if !nt.reachable(from, to) {
+// push delivers m's event, verifying at the edge exactly as a real handler
+// would. A message this harness built must always verify, so a rejection there
+// is a real bug rather than a scenario; an injected one is Byzantine by
+// construction, and dropping it is what a real handler does.
+func (nt *Net) push(m scheduled) {
+	if !nt.reachable(m.from, m.to) {
 		return
 	}
-	dst := nt.replicas[to]
-	if !nt.verifyEvent(dst, e) {
-		nt.t.Fatalf("replica %d rejected %s from replica %d", dst.id, label, from+1)
+	dst := nt.replicas[m.to]
+	if !nt.verifyEvent(dst, m.event) {
+		if m.kind != kInject {
+			nt.t.Fatalf("replica %d rejected %s from replica %d", dst.id, m.kind, m.from+1)
+		}
 		return
 	}
-	dst.loop.Push(e)
+	dst.loop.Push(m.event)
 	for dst.loop.Tick() {
 	}
 	nt.step++
-	nt.trace = append(nt.trace, fmt.Sprintf("%d r%d->r%d %s view=%d", nt.step, from+1, to+1, label, eventView(e)))
+	nt.trace = append(nt.trace, fmt.Sprintf("%d r%d->r%d %s view=%d", nt.step, m.from+1, m.to+1, m.kind, eventView(m.event)))
 }
 
 // deliverFetch answers a fetch by scanning replicas in index order for one
@@ -368,7 +401,8 @@ func (nt *Net) reachable(a, b int) bool {
 }
 
 // verifyEvent checks e with dst's own Verifier. A FetchedEvent needs no check
-// here: it is content-addressed by construction in deliverFetch.
+// here: deliverFetch answers by content-addressed lookup, and an injected one
+// is a fault the test meant to deliver.
 func (nt *Net) verifyEvent(dst *replica, e hotstuff.Event) bool {
 	switch ev := e.(type) {
 	case hotstuff.ProposeEvent:
