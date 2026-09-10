@@ -30,11 +30,14 @@ type Config struct {
 	Observer func(hotstuff.Event, hotstuff.State, time.Duration)
 }
 
-// voteSet accumulates the votes for one block. The view is kept alongside so
-// the map can be pruned without a store lookup.
-type voteSet struct {
+// voteKey buckets votes by the exact thing their signatures cover. Keying by
+// block hash alone would let a vote claiming a different view for the same
+// block join an honest quorum, and the certificate that formed would carry
+// signatures over two digests and fail this replica's own VerifyQC. The view
+// is in the key, so pruning needs no store lookup either.
+type voteKey struct {
 	view hotstuff.View
-	sigs []hotstuff.Signature
+	hash hotstuff.Hash
 }
 
 // Core is the protocol state machine. It owns all protocol state and runs on a
@@ -64,7 +67,7 @@ type Core struct {
 	committedHash hotstuff.Hash
 	highQC        hotstuff.QuorumCert
 
-	votes    map[hotstuff.Hash]voteSet
+	votes    map[voteKey][]hotstuff.Signature
 	timeouts map[hotstuff.View][]hotstuff.Signature
 	fetching map[hotstuff.Hash]struct{}
 	pending  *hotstuff.Block // block whose commit check is waiting on a fetch
@@ -90,7 +93,7 @@ func New(cfg Config) *Core {
 		observe:       cfg.Observer,
 		committedHash: hotstuff.GenesisHash(),
 		highQC:        hotstuff.QuorumCert{BlockHash: hotstuff.GenesisHash()},
-		votes:         map[hotstuff.Hash]voteSet{},
+		votes:         map[voteKey][]hotstuff.Signature{},
 		timeouts:      map[hotstuff.View][]hotstuff.Signature{},
 		fetching:      map[hotstuff.Hash]struct{}{},
 	}
@@ -176,16 +179,17 @@ func (c *Core) onVote(e hotstuff.VoteEvent) {
 	if e.View <= c.highQC.View {
 		return
 	}
-	vs := c.votes[e.BlockHash]
-	if slices.ContainsFunc(vs.sigs, func(s hotstuff.Signature) bool { return s.Signer == e.Sig.Signer }) {
+	k := voteKey{view: e.View, hash: e.BlockHash}
+	sigs := c.votes[k]
+	if slices.ContainsFunc(sigs, func(s hotstuff.Signature) bool { return s.Signer == e.Sig.Signer }) {
 		return
 	}
-	vs.view, vs.sigs = e.View, append(vs.sigs, e.Sig)
-	c.votes[e.BlockHash] = vs
-	if len(vs.sigs) < c.quorum {
+	sigs = append(sigs, e.Sig)
+	c.votes[k] = sigs
+	if len(sigs) < c.quorum {
 		return
 	}
-	qc := hotstuff.QuorumCert{View: e.View, BlockHash: e.BlockHash, Sigs: canonical(vs.sigs)}
+	qc := hotstuff.QuorumCert{View: e.View, BlockHash: e.BlockHash, Sigs: canonical(sigs)}
 	c.advanceView(hotstuff.SyncInfo{QC: qc})
 }
 

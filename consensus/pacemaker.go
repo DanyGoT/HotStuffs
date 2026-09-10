@@ -62,9 +62,9 @@ func (c *Core) updateLock(qc hotstuff.QuorumCert) {
 // prune drops accumulator entries that can no longer matter, so none of them
 // grows without bound.
 func (c *Core) prune() {
-	for h, vs := range c.votes {
-		if vs.view <= c.highQC.View {
-			delete(c.votes, h)
+	for k := range c.votes {
+		if k.view <= c.highQC.View {
+			delete(c.votes, k)
 		}
 	}
 	for v := range c.timeouts {
