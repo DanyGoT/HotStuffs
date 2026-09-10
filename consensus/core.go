@@ -38,6 +38,14 @@ type Config struct {
 // answer in any case: the responder serves it from its store, by hash.
 const fetchRetryViews = 4
 
+// maxViewLead is how far ahead of the current view an inbound signature may
+// claim before this replica stops accumulating it. A view it has seen no
+// evidence for is a view it cannot aggregate anything in, so those signatures
+// only let one sender grow a map. Catching up does not depend on them: a QC
+// rides on every proposal and every timeout, and updateHighQC takes it
+// unconditionally.
+const maxViewLead = 4
+
 // voteKey buckets votes by the exact thing their signatures cover. Keying by
 // block hash alone would let a vote claiming a different view for the same
 // block join an honest quorum, and the certificate that formed would carry
@@ -46,6 +54,16 @@ const fetchRetryViews = 4
 type voteKey struct {
 	view hotstuff.View
 	hash hotstuff.Hash
+}
+
+// voterKey is one replica's vote slot for a view. An honest replica votes at
+// most once per view — the lemma VoteRule already rests on — so one entry per
+// (view, signer) is all that can ever be legitimate. Enforcing it is what
+// bounds the accumulator: keyed by digest alone, one sender could open a
+// bucket per fabricated block hash without ever repeating a signer.
+type voterKey struct {
+	view   hotstuff.View
+	signer hotstuff.ID
 }
 
 // Core is the protocol state machine. It owns all protocol state and runs on a
@@ -76,6 +94,7 @@ type Core struct {
 	highQC        hotstuff.QuorumCert
 
 	votes    map[voteKey][]hotstuff.Signature
+	voters   map[voterKey]struct{}
 	timeouts map[hotstuff.View][]hotstuff.Signature
 	fetching map[hotstuff.Hash]hotstuff.View // gap hash to the view its request went out in
 	pending  *hotstuff.Block                 // block whose commit check is waiting on a fetch
@@ -102,6 +121,7 @@ func New(cfg Config) *Core {
 		committedHash: hotstuff.GenesisHash(),
 		highQC:        hotstuff.QuorumCert{BlockHash: hotstuff.GenesisHash()},
 		votes:         map[voteKey][]hotstuff.Signature{},
+		voters:        map[voterKey]struct{}{},
 		timeouts:      map[hotstuff.View][]hotstuff.Signature{},
 		fetching:      map[hotstuff.Hash]hotstuff.View{},
 	}
@@ -184,15 +204,16 @@ func (c *Core) vote(b *hotstuff.Block) {
 func (c *Core) onVote(e hotstuff.VoteEvent) {
 	// At most one block per view can obtain a QC, so a QC at or above this
 	// view already makes these votes useless.
-	if e.View <= c.highQC.View {
+	if e.View <= c.highQC.View || e.View > c.view+maxViewLead {
 		return
 	}
+	vk := voterKey{view: e.View, signer: e.Sig.Signer}
+	if _, voted := c.voters[vk]; voted {
+		return // one vote per signer per view, repeat or equivocation alike
+	}
+	c.voters[vk] = struct{}{}
 	k := voteKey{view: e.View, hash: e.BlockHash}
-	sigs := c.votes[k]
-	if slices.ContainsFunc(sigs, func(s hotstuff.Signature) bool { return s.Signer == e.Sig.Signer }) {
-		return
-	}
-	sigs = append(sigs, e.Sig)
+	sigs := append(c.votes[k], e.Sig)
 	c.votes[k] = sigs
 	if len(sigs) < c.quorum {
 		return
@@ -205,7 +226,7 @@ func (c *Core) onTimeout(e hotstuff.TimeoutEvent) {
 	// A timeout carries its sender's highest QC, which is how a lagging replica
 	// catches up with no NewView message in the protocol.
 	c.updateHighQC(e.HighQC)
-	if e.View < c.view {
+	if e.View < c.view || e.View > c.view+maxViewLead {
 		return
 	}
 	sigs := c.timeouts[e.View]
