@@ -45,10 +45,11 @@ func (c *Core) updateHighQC(qc hotstuff.QuorumCert) {
 	}
 }
 
-// updateLock raises the lock to the view two certificates back — the paper's
-// b_lock ← b'. When the certified block is absent this replica is behind, and
-// leaving the lock stale is safe: its own vote cannot form a quorum, and every
-// replica that voted in a committed chain did hold the blocks.
+// updateLock raises the lock to the view two certificates back — Algorithm 5's
+// b_lock ← b', monotone as the paper has it. VoteRule guarantees the certified
+// block is held whenever a vote was cast, so the absent case reached here is
+// only a proposal this replica declined to vote for, and leaving the lock
+// alone is then exactly what the paper does.
 func (c *Core) updateLock(qc hotstuff.QuorumCert) {
 	b, ok := c.store.Get(qc.BlockHash)
 	if !ok {
