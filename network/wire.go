@@ -1,6 +1,9 @@
-// Package network is the Gorums transport for HotStuff. wire.go is the only
-// file in the package — and the only file in the project — that knows
-// protobuf exists: everything below it deals only in domain types.
+// Package network is the Gorums transport for HotStuff. Three files here see
+// protobuf, and nothing else in the project does: wire.go converts between
+// the generated messages and the domain types, server.go implements the
+// generated server interface, and gorums.go calls the generated client
+// functions. Every package below this one deals only in domain types, and
+// check-deps enforces exactly that.
 package network
 
 import (
@@ -173,7 +176,12 @@ func fromBlock(b *hotstuffpb.Block) (*hotstuff.Block, error) {
 	if err != nil {
 		return nil, fmt.Errorf("block parent: %w", err)
 	}
-	if b.GetProposer() == 0 {
+	// Proposer 0 is genesis and nothing else: every other block names the
+	// leader of its view, and the rotation numbers replicas from 1. Genesis
+	// is seeded locally by every store, so it is never actually fetched — but
+	// the Fetch responder would serve it if asked, and rejecting it here
+	// would make the answer undecodable.
+	if b.GetProposer() == 0 && b.GetView() != 0 {
 		return nil, errors.New("block: proposer unset")
 	}
 	qc, err := fromQC(b.GetCert())

@@ -335,7 +335,12 @@ func TestSampleRejectsZeroInterval(t *testing.T) {
 	}
 }
 
+// TestSnapshotRaceSafe drives commits and snapshots concurrently. Every
+// commit here takes exactly the same time, so any snapshot whose total is not
+// its sample count times that has combined two counters read a moment apart —
+// a mean no run ever produced.
 func TestSnapshotRaceSafe(t *testing.T) {
+	const perCommit = 7 * time.Millisecond
 	clock := &fakeClock{now: time.Unix(0, 0)}
 	m := New(clock, 0)
 	rt := &recordingTransport{}
@@ -349,17 +354,24 @@ func TestSnapshotRaceSafe(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for i := range iterations {
 			b := block(hotstuff.View(i), nil)
 			tr.Propose(hotstuff.Proposal{Block: b})
 			m.Observe(hotstuff.ProposeEvent{}, hotstuff.State{View: hotstuff.View(i)}, time.Microsecond)
+			// Only the writer goroutine reads this clock; Snapshot stamps its
+			// own wall time.
+			clock.now = clock.now.Add(perCommit)
 			ex.Exec(b)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
-			_ = m.Snapshot()
+		for range iterations {
+			if s := m.Snapshot(); s.LatencyTotalNs != s.LatencySamples*uint64(perCommit) {
+				t.Errorf("Snapshot has %d ns over %d samples, want %d: the pair was read apart",
+					s.LatencyTotalNs, s.LatencySamples, s.LatencySamples*uint64(perCommit))
+				return
+			}
 		}
 	}()
 	wg.Wait()

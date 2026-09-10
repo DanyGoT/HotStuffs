@@ -42,7 +42,6 @@ type Rules interface {
 	// returned Proposal is unsigned: signing is the caller's job, so the rules
 	// stay crypto-free.
 	ProposeRule(State, [][]byte, *TimeoutCert) (Proposal, bool)
-	ChainLength() int
 }
 
 // BlockStore is the content-addressed block store.
