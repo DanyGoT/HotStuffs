@@ -19,8 +19,6 @@ func NewRules(id hotstuff.ID, store hotstuff.BlockStore) hotstuff.Rules {
 	return chained{id: id, store: store}
 }
 
-func (chained) ChainLength() int { return chainLength }
-
 // VoteRule is Algorithm 3's safeNode in the form the one-block-per-view lemma
 // permits. safeNode is "bNew extends bLock ∨ bNew.justify.height >
 // bLock.height"; an honest replica votes at most once per view, so at most one

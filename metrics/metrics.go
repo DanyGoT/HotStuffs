@@ -15,6 +15,13 @@ import (
 // defaultLatencyCap bounds the in-flight propose-time map when New is given 0.
 const defaultLatencyCap = 4096
 
+// latency is the commit-latency measurement so far: how many samples went
+// into it and what they sum to. The two only mean anything together.
+type latency struct {
+	samples uint64
+	totalNs uint64
+}
+
 // Metrics counts what a replica did. Construct one, wrap the two seams with
 // it, pass Observe as the core's observer, and read Snapshot from anywhere.
 type Metrics struct {
@@ -46,8 +53,10 @@ type Metrics struct {
 	stepFetchedNanos     atomic.Uint64
 	stepViewTimeoutNanos atomic.Uint64
 
-	latencySamples atomic.Uint64
-	latencyTotalNs atomic.Uint64
+	// latency holds the sample count and the running total together, so a
+	// reader can never pair a count with a total from a different moment and
+	// report a mean that neither of them ever produced.
+	latency        atomic.Pointer[latency]
 	latencyMaxNs   atomic.Uint64
 	latencyDropped atomic.Uint64
 
@@ -156,12 +165,17 @@ func (m *Metrics) noteExecuted(h hotstuff.Hash) {
 		return
 	}
 	delete(m.proposedAt, h)
-	latency := uint64(m.clock.Now().Sub(t))
-	m.latencySamples.Add(1)
-	m.latencyTotalNs.Add(latency)
+	took := uint64(m.clock.Now().Sub(t))
+	// Written only from the consensus goroutine, so a load and a store is all
+	// the update needs; the atomic is for the readers.
+	next := latency{samples: 1, totalNs: took}
+	if cur := m.latency.Load(); cur != nil {
+		next = latency{samples: cur.samples + 1, totalNs: cur.totalNs + took}
+	}
+	m.latency.Store(&next)
 	for {
 		high := m.latencyMaxNs.Load()
-		if latency <= high || m.latencyMaxNs.CompareAndSwap(high, latency) {
+		if took <= high || m.latencyMaxNs.CompareAndSwap(high, took) {
 			break
 		}
 	}
@@ -249,6 +263,10 @@ type Snapshot struct {
 // is why it stamps the wall clock rather than the injected one: the Clock seam
 // belongs to the consensus goroutine.
 func (m *Metrics) Snapshot() Snapshot {
+	var lat latency
+	if cur := m.latency.Load(); cur != nil {
+		lat = *cur
+	}
 	return Snapshot{
 		Time: time.Now(),
 
@@ -279,8 +297,8 @@ func (m *Metrics) Snapshot() Snapshot {
 			"view_timeout": m.stepViewTimeoutNanos.Load(),
 		},
 
-		LatencySamples: m.latencySamples.Load(),
-		LatencyTotalNs: m.latencyTotalNs.Load(),
+		LatencySamples: lat.samples,
+		LatencyTotalNs: lat.totalNs,
 		LatencyMaxNs:   m.latencyMaxNs.Load(),
 		LatencyDropped: m.latencyDropped.Load(),
 	}
