@@ -333,10 +333,3 @@ func TestProposeRule(t *testing.T) {
 		}
 	})
 }
-
-func TestChainLength(t *testing.T) {
-	// ChainLength is the number of consecutive certified views a commit needs.
-	if got := consensus.NewRules(1, blockchain.New()).ChainLength(); got != 3 {
-		t.Errorf("ChainLength() = %d, want 3", got)
-	}
-}

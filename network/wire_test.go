@@ -320,9 +320,10 @@ func TestMalformed(t *testing.T) {
 			}.Build())
 			return err
 		}},
-		{"fromBlock: proposer unset", true, func() error {
+		{"fromBlock: proposer unset above genesis", true, func() error {
+			// Proposer 0 belongs to genesis alone, and genesis is at view 0.
 			_, err := fromBlock(hotstuffpb.Block_builder{
-				Parent: genesisHashBytes(), Proposer: 0, Cert: validCert,
+				Parent: genesisHashBytes(), View: 1, Proposer: 0, Cert: validCert,
 			}.Build())
 			return err
 		}},
@@ -377,5 +378,22 @@ func TestHashLength(t *testing.T) {
 				t.Errorf("error %q does not mention length %d", err.Error(), n)
 			}
 		})
+	}
+}
+
+// TestGenesisRoundTrips covers the one block whose proposer is 0. Genesis is
+// seeded locally by every store, so it is never actually fetched, but the
+// Fetch responder serves whatever the store holds — and an answer this side
+// could not decode would be a silent backfill failure.
+func TestGenesisRoundTrips(t *testing.T) {
+	got, err := fromBlock(toBlock(hotstuff.Genesis()))
+	if err != nil {
+		t.Fatalf("fromBlock(toBlock(Genesis())) = %v", err)
+	}
+	if got.Hash() != hotstuff.GenesisHash() {
+		t.Errorf("round-tripped genesis hashes to %x, want %x", got.Hash(), hotstuff.GenesisHash())
+	}
+	if got.Proposer() != 0 || got.View() != 0 {
+		t.Errorf("round-tripped genesis = {View:%d Proposer:%d}, want both 0", got.View(), got.Proposer())
 	}
 }
