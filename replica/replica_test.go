@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -372,4 +373,118 @@ func TestClusterViaPeerAddresses(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+// blockingCommands stalls Poll until released, which stalls the consensus
+// loop inside Step and so lets a test fill the inbound queue deterministically.
+type blockingCommands struct {
+	block chan struct{}
+	hit   chan struct{}
+	once  sync.Once
+}
+
+func (c *blockingCommands) Poll() ([][]byte, bool) {
+	c.once.Do(func() { close(c.hit) })
+	<-c.block
+	return nil, false
+}
+
+// TestShutdownReleasesInboundProducers pins the shutdown contract. The inbound
+// queue is bounded and blocking, and Gorums runs each handler on a goroutine
+// it never waits for, so a handler parked on a push the loop has stopped
+// answering is stranded for the life of the process. Stalling the loop inside
+// Poll makes that state reachable on purpose rather than by race.
+func TestShutdownReleasesInboundProducers(t *testing.T) {
+	srvs, stopSrvs, err := gorums.NewLocalServers(1, gorums.WithLocalDialOptions(insecureDial))
+	if err != nil {
+		t.Fatalf("NewLocalServers: %v", err)
+	}
+	t.Cleanup(stopSrvs)
+	privs, pubs, err := crypto.GenerateKeys(1)
+	if err != nil {
+		t.Fatalf("GenerateKeys: %v", err)
+	}
+
+	cmds := &blockingCommands{block: make(chan struct{}), hit: make(chan struct{})}
+	r := New(Config{
+		ID: 1, Key: privs[1], Keys: pubs,
+		Commands: cmds, ViewDuration: testView,
+		Server: srvs[0], QueueSize: 2,
+	})
+
+	baseline := runtime.NumGoroutine()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	runDone := make(chan error, 1)
+	go func() { runDone <- r.Run(ctx) }()
+
+	select {
+	case <-cmds.hit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop never reached Poll, so it was never stalled")
+	}
+
+	// Nothing is consuming while Poll is stalled, so these all land and the
+	// one after them has nowhere to go.
+	for range cap(r.q) {
+		r.q <- hotstuff.ViewTimeoutEvent{}
+	}
+	parked := make(chan struct{})
+	go func() {
+		defer close(parked)
+		r.q <- hotstuff.ViewTimeoutEvent{}
+	}()
+	time.Sleep(20 * time.Millisecond) // let the producer reach the send and park
+
+	cancel()
+	close(cmds.block)
+
+	select {
+	case <-parked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a producer is still parked on the inbound queue after shutdown")
+	}
+	if err := <-runDone; !errors.Is(err, context.Canceled) {
+		t.Errorf("Run returned %v, want context.Canceled", err)
+	}
+	var got int
+	if !waitFor(5*time.Second, func() bool { got = runtime.NumGoroutine(); return got <= baseline }) {
+		t.Errorf("%d goroutines after shutdown against %d before Run, want no more", got, baseline)
+	}
+}
+
+// TestNewRejectsMismatchedPeersAndKeys pins the cross-check: the public keys
+// are the replica set, so a peer list of a different size would give this
+// replica a quorum and a leader rotation its peers do not share.
+func TestNewRejectsMismatchedPeersAndKeys(t *testing.T) {
+	privs, pubs, err := crypto.GenerateKeys(4)
+	if err != nil {
+		t.Fatalf("GenerateKeys: %v", err)
+	}
+	cfg := func() Config {
+		return Config{ID: 1, Key: privs[1], Keys: pubs, Listen: "127.0.0.1:0"}
+	}
+
+	t.Run("too few peers", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("New accepted 3 peer addresses against 4 public keys")
+			}
+		}()
+		c := cfg()
+		c.Peers = map[uint32]string{1: "a:1", 2: "b:2", 3: "c:3"}
+		New(c)
+	})
+
+	t.Run("own key missing", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Error("New accepted a key set with no key for this replica's own ID")
+			}
+		}()
+		c := cfg()
+		c.ID = 9
+		c.Key = privs[1]
+		New(c)
+	})
 }
