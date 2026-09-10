@@ -21,14 +21,28 @@ func NewRules(id hotstuff.ID, store hotstuff.BlockStore) hotstuff.Rules {
 
 func (chained) ChainLength() int { return chainLength }
 
-// VoteRule is the DiemBFT formulation, a deliberate deviation from Algorithm 4.
-// The paper's "bNew extends bLock ∨ qc.height > bLock.height" disjunction
-// collapses to qc.View >= LockedView: voting at most once per view means at most
-// one block per view can obtain a QC, so a QC at exactly LockedView certifies
-// exactly the locked block. The payoff is that voting never walks the chain, so
-// a replica that missed blocks stays live and backfills lazily.
-func (chained) VoteRule(s hotstuff.State, p hotstuff.Proposal) bool {
-	return p.Block.View() > s.LastVotedView && p.Block.QC().View >= s.LockedView
+// VoteRule is Algorithm 3's safeNode in the form the one-block-per-view lemma
+// permits. safeNode is "bNew extends bLock ∨ bNew.justify.height >
+// bLock.height"; an honest replica votes at most once per view, so at most one
+// block per view can obtain a QC, so a QC at exactly LockedView certifies
+// exactly the locked block and the extends branch collapses into
+// qc.View >= LockedView.
+//
+// The store lookup is what keeps the lock resolvable. Algorithm 5 sets
+// bLock ← b', the block this proposal's QC certifies, and a replica that does
+// not hold b' cannot take that lock: it would join the quorum certifying the
+// 3-chain while its own lock stayed behind, which is the one case the chain's
+// safety argument assumes away. It is one O(1) lookup, one level deep, so
+// voting still never walks the chain. Carrying the parent's view inside the
+// QuorumCert would resolve the lock too, but that is DiemBFT's design and it
+// changes both the wire format and the vote digest, for nothing this does not
+// already give.
+func (r chained) VoteRule(s hotstuff.State, p hotstuff.Proposal) bool {
+	if p.Block.View() <= s.LastVotedView || p.Block.QC().View < s.LockedView {
+		return false
+	}
+	_, held := r.store.Get(p.Block.QC().BlockHash)
+	return held
 }
 
 // ProposeRule extends the highest QC in the current view. The Proposal comes
