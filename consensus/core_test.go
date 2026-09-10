@@ -110,6 +110,17 @@ func (h *harness) qcFor(t *testing.T, view hotstuff.View, bh hotstuff.Hash) hots
 	return hotstuff.QuorumCert{View: view, BlockHash: bh, Sigs: canonical(sigs)}
 }
 
+// assertHighQCVerifies pins the invariant a certificate must satisfy: whatever
+// QC the core adopts has to pass the replica's own verifier, or the proposal
+// it justifies is rejected by every peer.
+func (h *harness) assertHighQCVerifies(t *testing.T) {
+	t.Helper()
+	ver := hotstuff.NewVerifier(nocrypto.New(h.id, h.n), hotstuff.RoundRobin(h.n))
+	if qc := h.core.State().HighQC; !ver.VerifyQC(qc) {
+		t.Fatalf("HighQC{View:%d Hash:%x Sigs:%d} fails the replica's own VerifyQC", qc.View, qc.BlockHash[:4], len(qc.Sigs))
+	}
+}
+
 // buildChain returns blocks for the given views, each extending the previous
 // and carrying a QC for it, rooted at genesis. Proposer 1 throughout: the
 // tests using it only ever inspect the commit/fetch path, never leadership.
@@ -155,6 +166,7 @@ func driveChain(t *testing.T, h *harness, upTo hotstuff.View) []*hotstuff.Block 
 		h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 2, v, bh)})
 		h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 3, v, bh)})
 
+		h.assertHighQCVerifies(t)
 		qc = hotstuff.QuorumCert{View: v, BlockHash: bh}
 	}
 	return blocks
@@ -375,6 +387,31 @@ func TestVotesForDifferentBlocksDoNotMix(t *testing.T) {
 	if n := len(h.core.votes); n != 2 {
 		t.Errorf("votes has %d entries, want 2 separate blocks", n)
 	}
+}
+
+func TestMixedViewVotesDoNotFormAQC(t *testing.T) {
+	h := newHarness(t, 1, 4)
+	h.core.Start()
+
+	bh := buildChain(1)[0].Hash()
+	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 1, 1, bh)})
+	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 2, 1, bh)})
+	// A faulty replica claims a different view for the block two honest
+	// replicas just voted for. The three signatures cover two digests, so they
+	// are not a quorum for either.
+	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 3, 2, bh)})
+
+	if got := h.core.State().HighQC.View; got != 0 {
+		t.Errorf("HighQC.View = %d, want 0: votes over two digests cannot certify", got)
+	}
+	h.assertHighQCVerifies(t)
+
+	// The honest third vote completes the quorum the faulty one could not.
+	h.core.Step(hotstuff.VoteEvent{PartialCert: h.voteFrom(t, 3, 1, bh)})
+	if got := h.core.State().HighQC.View; got != 1 {
+		t.Errorf("HighQC.View = %d, want 1", got)
+	}
+	h.assertHighQCVerifies(t)
 }
 
 // --- Locking ---
