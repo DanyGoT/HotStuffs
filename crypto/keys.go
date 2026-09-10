@@ -78,8 +78,17 @@ func ReadKeys(dir string, id hotstuff.ID) (*ecdsa.PrivateKey, map[hotstuff.ID]*e
 		}
 		pubs[hotstuff.ID(n)] = pub
 	}
+	// The public keys found here define the replica set, and so the quorum
+	// and the leader rotation. They must therefore be exactly 1..n: a stale
+	// <id>.pub left in the directory would otherwise change both, silently,
+	// and only on the replicas that can see the file.
 	if len(pubs) == 0 {
 		return nil, nil, fmt.Errorf("no public keys in %s", dir)
+	}
+	for i := hotstuff.ID(1); int(i) <= len(pubs); i++ {
+		if pubs[i] == nil {
+			return nil, nil, fmt.Errorf("%s holds %d public keys but not %d.pub: they must be 1..%d", dir, len(pubs), i, len(pubs))
+		}
 	}
 	return priv, pubs, nil
 }

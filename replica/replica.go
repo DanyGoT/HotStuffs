@@ -4,6 +4,7 @@ package replica
 import (
 	"context"
 	"crypto/ecdsa"
+	"fmt"
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/blockchain"
@@ -54,6 +55,7 @@ type Replica struct {
 	loop *consensus.Loop
 	net  *network.Transport
 	log  *hotstuff.MemLog
+	q    hotstuff.Queue
 }
 
 // New wires a replica. The order is forced by the constructors themselves: the
@@ -74,6 +76,15 @@ func New(cfg Config) *Replica {
 		cfg.Commands = NoCommands{}
 	}
 	n := len(cfg.Keys) // the registered public keys are the replica set
+	// The key set fixes the quorum and the leader rotation, so a peer list
+	// that disagrees with it would give this replica a different quorum from
+	// its peers. That is a deployment error to fail on, not to reconcile.
+	if len(cfg.Peers) != 0 && len(cfg.Peers) != n {
+		panic(fmt.Sprintf("replica: %d peer addresses but %d public keys", len(cfg.Peers), n))
+	}
+	if cfg.Keys[cfg.ID] == nil {
+		panic(fmt.Sprintf("replica: no public key registered for this replica's own ID %d", cfg.ID))
+	}
 
 	q := hotstuff.NewQueue(cfg.QueueSize)
 	store := blockchain.New()
@@ -117,7 +128,7 @@ func New(cfg Config) *Replica {
 		Observer:  observer,
 	})
 
-	return &Replica{id: cfg.ID, core: core, loop: consensus.NewLoop(core, q), net: net, log: log}
+	return &Replica{id: cfg.ID, core: core, loop: consensus.NewLoop(core, q), net: net, log: log, q: q}
 }
 
 // Run serves the transport, waits for every peer, then runs the consensus loop
@@ -127,12 +138,40 @@ func New(cfg Config) *Replica {
 // replica stops; the transport is shut down after the loop, never before.
 func (r *Replica) Run(ctx context.Context) error {
 	r.net.Start()
-	defer r.net.Stop()
 	if err := r.net.WaitForPeers(ctx); err != nil {
+		r.stop()
 		return err
 	}
 	r.core.Start()
-	return r.loop.Run(ctx)
+	err := r.loop.Run(ctx)
+	r.stop()
+	return err
+}
+
+// stop shuts the transport down and keeps the inbound queue moving while it
+// does. That queue is bounded and blocking by design, so a handler parked on
+// a push the loop has stopped answering never returns — and Gorums dispatches
+// each handler on a goroutine it never waits for, so shutting down without
+// draining simply strands them. Events read here are discarded: the core has
+// stopped, and nothing can act on them.
+func (r *Replica) stop() {
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		r.net.Stop()
+	}()
+	for {
+		select {
+		case <-stopped:
+			// Whatever reached the queue before the transport went down is
+			// still holding its producer; let the last of them through.
+			for len(r.q) > 0 {
+				<-r.q
+			}
+			return
+		case <-r.q:
+		}
+	}
 }
 
 // ID is this replica's identity.
