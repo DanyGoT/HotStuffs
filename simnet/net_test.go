@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 )
 
@@ -322,4 +323,62 @@ func logsOf(nt *Net) map[hotstuff.ID][]*hotstuff.Block {
 		logs[nt.ID(i)] = nt.Log(i)
 	}
 	return logs
+}
+
+// --- Fault injection ---
+
+// countLabel counts trace lines carrying the given delivery label.
+func countLabel(trace []string, label string) int {
+	n := 0
+	for _, line := range trace {
+		if strings.Contains(line, " "+label+" ") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestInjectDeliversAndDropsUnverifiable is the fault-injection contract: an
+// injected event the receiver accepts is delivered like any other, and one it
+// rejects is dropped rather than failing the test, which is what a real
+// handler does with a Byzantine message.
+func TestInjectDeliversAndDropsUnverifiable(t *testing.T) {
+	nt := New(t, 4, WithViewDuration(10*time.Millisecond))
+
+	var bh hotstuff.Hash
+	bh[0] = 0x5A
+	sig, err := nocrypto.New(3, 4).Sign(hotstuff.VoteDigest(7, bh))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	nt.Inject(2, 0, hotstuff.VoteEvent{PartialCert: hotstuff.PartialCert{View: 7, BlockHash: bh, Sig: sig}})
+	// View 0 never verifies, whatever it is signed with.
+	nt.Inject(2, 0, hotstuff.VoteEvent{PartialCert: hotstuff.PartialCert{View: 0, BlockHash: bh, Sig: sig}})
+
+	nt.Deliver(len(nt.schedule)) // FIFO without a seed, so both injections land
+
+	if n := countLabel(nt.Trace(), "inject"); n != 1 {
+		t.Errorf("trace has %d injected deliveries, want 1: the unverifiable one must be dropped", n)
+	}
+}
+
+// TestDropPredicateSkipsSelectedDeliveries checks that Drop discards exactly
+// what it names and nothing else: replica 1's votes never arrive, yet the
+// remaining three still reach a quorum and commit.
+func TestDropPredicateSkipsSelectedDeliveries(t *testing.T) {
+	nt := New(t, 4, WithSeed(1), WithViewDuration(10*time.Millisecond))
+	nt.Drop(func(d Delivery) bool {
+		_, isVote := d.Event.(hotstuff.VoteEvent)
+		return isVote && d.From == 0
+	})
+
+	if !nt.RunUntil(func() bool { return minLog(nt) >= 3 }, 20000) {
+		t.Fatalf("progress stalled with one replica's votes dropped, minLog=%d", minLog(nt))
+	}
+	for _, line := range nt.Trace() {
+		if strings.Contains(line, "r1->") && strings.Contains(line, " vote ") {
+			t.Fatalf("a dropped delivery was delivered: %q", line)
+		}
+	}
+	nt.CheckSafety(t)
 }
