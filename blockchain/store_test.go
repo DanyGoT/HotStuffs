@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 )
@@ -268,4 +269,31 @@ func TestConcurrentGetPut(t *testing.T) {
 			t.Errorf("block %x lost under concurrent access", b.Hash())
 		}
 	}
+}
+
+// TestPruneCostIsFlatInChainDepth pins the complexity rather than a number:
+// one Prune must cost what arrived since the last one, not what the chain has
+// accumulated. Walking head to genesis every commit made this ratio scale
+// with depth — roughly 14x across these two — so a generous bound still
+// catches a regression without being flaky.
+func TestPruneCostIsFlatInChainDepth(t *testing.T) {
+	perPrune := func(depth int) time.Duration {
+		s := New()
+		blocks := chain(depth, "main")
+		for _, b := range blocks {
+			s.Put(b)
+		}
+		start := time.Now()
+		for _, b := range blocks { // one Prune per commit, as Core.execute does
+			s.Prune(b.Hash())
+		}
+		return time.Since(start) / time.Duration(depth)
+	}
+
+	perPrune(1000) // warm up, so first-run costs stay out of the ratio
+	shallow, deep := perPrune(1000), perPrune(8000)
+	if deep > 4*shallow {
+		t.Errorf("Prune costs %v per commit at depth 8000 against %v at depth 1000, want no scaling with depth", deep, shallow)
+	}
+	t.Logf("per Prune: depth 1000 %v, depth 8000 %v", shallow, deep)
 }
