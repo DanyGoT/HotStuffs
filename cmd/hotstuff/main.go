@@ -99,7 +99,11 @@ func run() error {
 func writeKeys() error {
 	n := *local
 	if n == 0 {
-		n = len(addresses())
+		addrs, err := addresses()
+		if err != nil {
+			return err
+		}
+		n = len(addrs)
 	}
 	if n == 0 || *keys == "" {
 		return errors.New("-gen-keys needs -keys and either -local N or -remotes")
@@ -149,10 +153,14 @@ func runLocal(n int) error {
 // runOne runs this process's single replica. -remotes lists every replica in ID
 // order, so a replica's position in that list is its ID.
 func runOne() error {
-	addrs := addresses()
-	idx := slices.Index(addrs, *self)
+	addrs, err := addresses()
+	if err != nil {
+		return err
+	}
+	self := strings.TrimSpace(*self)
+	idx := slices.Index(addrs, self)
 	if idx < 0 {
-		return fmt.Errorf("-self %q does not appear in -remotes", *self)
+		return fmt.Errorf("-self %q does not appear in -remotes", self)
 	}
 	if *keys == "" {
 		return errors.New("-self needs -keys")
@@ -168,7 +176,7 @@ func runOne() error {
 	}
 	m := metrics.New(hotstuff.SystemClock{}, 0)
 	return runAll([]*replica.Replica{replica.New(replica.Config{
-		ID: id, Peers: peers, Listen: *self,
+		ID: id, Peers: peers, Listen: self,
 		Key: priv, Keys: pubs,
 		Commands:     commands(),
 		ViewDuration: *viewDuration,
@@ -260,11 +268,27 @@ func report(reps []*replica.Replica, meters []*metrics.Metrics) error {
 	return nil
 }
 
-func addresses() []string {
-	if *remotes == "" {
-		return nil
+// addresses is -remotes as a list, whitespace trimmed. A replica's position in
+// it is its ID, so an empty or repeated entry would hand two replicas the same
+// identity rather than fail.
+func addresses() ([]string, error) {
+	if strings.TrimSpace(*remotes) == "" {
+		return nil, nil
 	}
-	return strings.Split(*remotes, ",")
+	addrs := strings.Split(*remotes, ",")
+	seen := make(map[string]bool, len(addrs))
+	for i, addr := range addrs {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return nil, fmt.Errorf("-remotes entry %d is empty", i+1)
+		}
+		if seen[addr] {
+			return nil, fmt.Errorf("-remotes lists %q twice; each entry is one replica's ID", addr)
+		}
+		seen[addr] = true
+		addrs[i] = addr
+	}
+	return addrs, nil
 }
 
 func commands() hotstuff.CommandQueue {
