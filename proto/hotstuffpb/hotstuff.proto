@@ -12,33 +12,80 @@ import "google/protobuf/empty.proto";
 // signer is a *claim*: meaningful only once sig verifies against the public key
 // registered for that ID. Gorums exposes no authenticated sender identity, so
 // authentication is by signature, never by connection.
-message Signature   { uint32 signer = 1; bytes sig = 2; }  // ECDSA P-256, ASN.1 DER
-message QuorumCert  { uint64 view = 1; bytes block_hash = 2; repeated Signature sigs = 3; }
-message TimeoutCert { uint64 view = 1; repeated Signature sigs = 2; }
+message Signature {
+  uint32 signer = 1;
+  bytes sig = 2;
+}  // ECDSA P-256, ASN.1 DER
+
+message QuorumCert {
+  uint64 view = 1;
+  bytes block_hash = 2;
+  repeated Signature sigs = 3;
+}
+
+message TimeoutCert {
+  uint64 view = 1;
+  repeated Signature sigs = 2;
+}
+
 // No height field: view is the height. No timestamp: the hash is a pure
 // function of protocol state and is reproducible in tests.
-message Block       { bytes parent = 1; uint64 view = 2; uint32 proposer = 3;
-                      repeated bytes cmds = 4; QuorumCert cert = 5; }
-message Proposal    { Block block = 1; Signature sig = 2; TimeoutCert tc = 3; }
-message VoteMsg     { uint64 view = 1; bytes block_hash = 2; Signature sig = 3; }
+message Block {
+  bytes parent = 1;
+  uint64 view = 2;
+  uint32 proposer = 3;
+  repeated bytes cmds = 4;
+  QuorumCert cert = 5;
+}
+
+message Proposal {
+  Block block = 1;
+  Signature sig = 2;
+  TimeoutCert tc = 3;
+}
+
+message VoteMsg {
+  uint64 view = 1;
+  bytes block_hash = 2;
+  Signature sig = 3;
+}
+
 // One signature, not two: it covers only the view, so it aggregates into a
 // TimeoutCert, and high_qc authenticates itself.
-message TimeoutMsg  { uint64 view = 1; Signature sig = 2; QuorumCert high_qc = 3; }
-message BlockHash   { bytes hash = 1; }
+message TimeoutMsg {
+  uint64 view = 1;
+  Signature sig = 2;
+  QuorumCert high_qc = 3;
+}
+
+message BlockHash {
+  bytes hash = 1;
+}
 
 // GORUMS: an RPC name must never equal a message name, or the generated client
 // function collides with the generated type — hence VoteMsg, not Vote. Only one
 // service is allowed per .proto file, and Config, Node, NodeContext and
 // ConfigContext are reserved message names.
 service HotStuff {
-  rpc Propose(Proposal)   returns (google.protobuf.Empty) { option (gorums.multicast) = true; }
+  rpc Propose(Proposal) returns (google.protobuf.Empty) {
+    option (gorums.multicast) = true;
+  }
+
   // Votes are broadcast, not unicast to the leader of the next view. That
   // mapping stalls commits whenever a crashed replica is both a leader and the
   // preceding view's sole collector.
-  rpc Vote(VoteMsg)       returns (google.protobuf.Empty) { option (gorums.multicast) = true; }
-  rpc Timeout(TimeoutMsg) returns (google.protobuf.Empty) { option (gorums.multicast) = true; }
+  rpc Vote(VoteMsg) returns (google.protobuf.Empty) {
+    option (gorums.multicast) = true;
+  }
+
+  rpc Timeout(TimeoutMsg) returns (google.protobuf.Empty) {
+    option (gorums.multicast) = true;
+  }
+
   // The only natural quorum call in the protocol: blocks are content-addressed,
   // so any single correct response suffices and a wrong one is caught by
   // re-hashing. Consumed with .First().
-  rpc Fetch(BlockHash)    returns (Block)                 { option (gorums.quorumcall) = true; }
+  rpc Fetch(BlockHash) returns (Block) {
+    option (gorums.quorumcall) = true;
+  }
 }
