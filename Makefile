@@ -1,4 +1,4 @@
-GO_DIRS := hotstuff crypto blockchain consensus network simnet replica cmd internal
+GO_DIRS := hotstuff crypto blockchain consensus diem network simnet replica cmd internal
 PROTO   := proto/hotstuffpb/hotstuff.proto
 BIN     := $(CURDIR)/bin
 PLUGINS := $(BIN)/protoc-gen-go $(BIN)/protoc-gen-gorums
@@ -32,8 +32,8 @@ race:
 check-deps:
 	@# a dot in the first path element means a domain, i.e. not stdlib
 	@! go list -f '{{join .Deps "\n"}}' ./hotstuff | grep -q '^[^/]*\.'
-	@! grep -rq --include='*.go' 'hotstuffpb\|relab/gorums' $(wildcard hotstuff crypto blockchain consensus) /dev/null
-	@! grep -rEq --include='*.go' '^[[:space:]]*go ' $(wildcard hotstuff consensus) /dev/null
+	@! grep -rq --include='*.go' 'hotstuffpb\|relab/gorums' $(wildcard hotstuff crypto blockchain consensus diem) /dev/null
+	@! grep -rEq --include='*.go' '^[[:space:]]*go ' $(wildcard hotstuff consensus diem) /dev/null
 	@! grep -rq --include='*.go' 'reflect\.' $(wildcard $(GO_DIRS)) /dev/null
 	@echo "check-deps: ok"
 
