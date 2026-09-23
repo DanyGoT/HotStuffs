@@ -29,8 +29,6 @@ type Store struct {
 	byView map[hotstuff.View][]*hotstuff.Block
 }
 
-var _ hotstuff.BlockStore = (*Store)(nil)
-
 // New returns a store already holding the genesis block, so that a chain walk
 // always terminates.
 func New() *Store {
@@ -70,7 +68,8 @@ func (s *Store) Put(b *hotstuff.Block) {
 // Prune drops every block that can no longer be committed — one whose view is at
 // or below head's and that is neither genesis nor an ancestor of head — and
 // returns them in descending view order, ties broken by ascending hash, so the
-// newest abandoned fork comes first. If head is not stored, it is a no-op.
+// newest abandoned fork comes first — a client layer may want to abort them.
+// If head is not stored, it is a no-op.
 //
 // Heads only advance along one chain, so blocks already settled below an
 // earlier head are kept without being looked at again: one call costs what

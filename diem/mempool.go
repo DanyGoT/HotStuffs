@@ -42,5 +42,3 @@ func (p *FIFOPool) GetTransactions() [][]byte {
 	}
 	return out
 }
-
-var _ MemPool = (*FIFOPool)(nil)

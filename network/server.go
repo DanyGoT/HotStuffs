@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/DanyGoT/HotStuffs/blockchain"
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 	"github.com/DanyGoT/HotStuffs/proto/hotstuffpb"
 	"github.com/relab/gorums"
@@ -28,7 +29,7 @@ import (
 type handler struct {
 	ver   *hotstuff.Verifier
 	sink  hotstuff.EventSink
-	store hotstuff.BlockStore
+	store *blockchain.Store
 
 	rejected atomic.Uint64
 }

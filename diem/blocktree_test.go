@@ -2,6 +2,7 @@ package diem
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"testing"
 
@@ -182,6 +183,58 @@ func TestProcessVoteDuplicateSenderDoesNotCountTwice(t *testing.T) {
 	}
 	if qc := tree.ProcessVote(castVote(3, voteInfo, commit)); qc == nil {
 		t.Fatal("no QC formed once a 3rd distinct signer voted")
+	}
+}
+
+// unsignableCrypto verifies normally but cannot produce a signature, which
+// isolates the one path where the quorum is complete and this replica still has
+// nothing to author the certificate with.
+type unsignableCrypto struct{ Crypto }
+
+func (unsignableCrypto) Sign(Hash) (Signature, error) { return Signature{}, errors.New("no key") }
+
+// TestProcessVoteWithoutAnAuthorSignatureEmitsNoQC pins the consequence of the
+// author signature being verified on receipt: a certificate this replica cannot
+// sign is one no receiver would accept, so it is not worth emitting.
+func TestProcessVoteWithoutAnAuthorSignatureEmitsNoQC(t *testing.T) {
+	ledger := NewMemLedger()
+	tree := NewBlockTree(1, testQuorum, ledger, unsignableCrypto{nocrypto.New(1, testN)})
+	voteInfo := VoteInfo{ID: Hash{0x15}, Round: 1, ParentID: GenesisBlock().ID(), ParentRound: 0}
+	commit := LedgerCommitInfo{VoteInfoHash: VoteInfoHash(voteInfo)}
+
+	for _, sender := range []ID{1, 2, 3} {
+		if qc := tree.ProcessVote(castVote(sender, voteInfo, commit)); qc != nil {
+			t.Fatal("emitted a QC this replica could not author")
+		}
+	}
+}
+
+// TestProcessVoteBoundsBucketsPerSignerPerRound pins the bound a digest key
+// alone cannot give. Votes bucket on the LedgerCommitInfo digest, and its
+// sender picks every field that feeds it: varying ExecStateID mints a fresh,
+// individually valid vote per message, so one sender opens one bucket per
+// message and the dedup inside a bucket never sees it. An honest replica votes
+// at most once per round — safeToVote requires blockRound > highestVoteRound,
+// which never decreases — so one slot per (round, signer) is all that can ever
+// be legitimate.
+func TestProcessVoteBoundsBucketsPerSignerPerRound(t *testing.T) {
+	tree, _ := newTestTree(1)
+	const round Round = 1
+
+	for i := range 32 {
+		voteInfo := VoteInfo{
+			ID:          Hash{0x16},
+			Round:       round,
+			ParentID:    GenesisBlock().ID(),
+			ExecStateID: Hash{byte(i)},
+		}
+		commit := LedgerCommitInfo{VoteInfoHash: VoteInfoHash(voteInfo)}
+		if qc := tree.ProcessVote(castVote(2, voteInfo, commit)); qc != nil {
+			t.Fatal("one sender reached quorum alone")
+		}
+	}
+	if got := len(tree.votes); got != 1 {
+		t.Errorf("one sender opened %d vote buckets in round %d, want 1", got, round)
 	}
 }
 

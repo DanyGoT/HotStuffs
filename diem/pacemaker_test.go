@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/consensus"
 	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 	"github.com/DanyGoT/HotStuffs/internal/fake"
@@ -28,29 +27,28 @@ func (n *recordNet) Timeout(m *TimeoutMsg) { n.timeouts = append(n.timeouts, m) 
 
 var _ Transport = (*recordNet)(nil)
 
-// recordSink is an EventSink double that records pushed events in order.
-type recordSink struct{ events []Event }
-
-func (s *recordSink) Push(e Event) { s.events = append(s.events, e) }
-
-var _ EventSink = (*recordSink)(nil)
+// recordSink returns a sink appending the events pushed to it, in order, to
+// *log.
+func recordSink(log *[]Event) func(Event) {
+	return func(e Event) { *log = append(*log, e) }
+}
 
 // newTestPacemaker returns a pacemaker for a replica set of size n, replica id
 // 1, wired to test doubles for the clock, sink and transport.
-func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fake.Clock, *recordNet, *recordSink) {
+func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fake.Clock, *recordNet, *[]Event) {
 	t.Helper()
 	quorum := hotstuff.QuorumSize(n)
 	faulty := hotstuff.Faulty(n)
 	clock := fake.NewClock(time.Unix(0, 0))
 	net := &recordNet{}
-	sink := &recordSink{}
+	events := new([]Event)
 	ledger := NewMemLedger()
 	crypto := nocrypto.New(1, n)
 	tree := NewBlockTree(1, quorum, ledger, crypto)
-	safety := NewSafety(1, quorum, crypto, ledger, tree)
-	dur := consensus.NewViewDuration(10*time.Millisecond, time.Second, 2)
-	pm := NewPacemaker(quorum, faulty, clock, dur, sink, net, safety, tree)
-	return pm, clock, net, sink
+	safety := NewSafety(1, NewVerifier(crypto, quorum), crypto, ledger, tree)
+	dur := hotstuff.NewDuration(10*time.Millisecond, time.Second, 2)
+	pm := NewPacemaker(quorum, faulty, clock, dur, recordSink(events), net, safety, tree)
+	return pm, clock, net, events
 }
 
 // timeoutInfoFrom builds a well-signed TimeoutInfo for sender, as if it were
@@ -148,17 +146,17 @@ func TestAdvanceRoundTCEntersNextRoundAndRecordsTC(t *testing.T) {
 }
 
 func TestStartTimerPushesLocalTimeoutEventForItsOwnRound(t *testing.T) {
-	pm, clock, _, sink := newTestPacemaker(t, 4)
+	pm, clock, _, events := newTestPacemaker(t, 4)
 	pm.startTimer(7)
 
 	clock.Advance(pm.dur.Duration())
 
-	if len(sink.events) != 1 {
-		t.Fatalf("sink got %d events, want 1", len(sink.events))
+	if len(*events) != 1 {
+		t.Fatalf("sink got %d events, want 1", len(*events))
 	}
-	ev, ok := sink.events[0].(LocalTimeoutEvent)
+	ev, ok := (*events)[0].(LocalTimeoutEvent)
 	if !ok {
-		t.Fatalf("event type = %T, want LocalTimeoutEvent", sink.events[0])
+		t.Fatalf("event type = %T, want LocalTimeoutEvent", (*events)[0])
 	}
 	if ev.Round != 7 {
 		t.Fatalf("LocalTimeoutEvent.Round = %d, want 7", ev.Round)
@@ -225,13 +223,15 @@ func TestProcessRemoteTimeoutQuorumFormsValidTC(t *testing.T) {
 		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
 	}
 
+	// Descending sender ids: a certificate's canonical signer order is a
+	// property of the certificate, not of the order its parts arrived in.
 	senders := []struct {
 		id          ID
 		highQCRound Round
 	}{
-		{2, 5},
-		{3, 7},
 		{4, 9},
+		{3, 7},
+		{2, 5},
 	}
 	var tc *TC
 	for _, s := range senders {
@@ -259,11 +259,41 @@ func TestProcessRemoteTimeoutQuorumFormsValidTC(t *testing.T) {
 		}
 	}
 
-	ledger := NewMemLedger()
-	crypto := nocrypto.New(1, 4)
-	tree := NewBlockTree(1, 3, ledger, crypto)
-	safety := NewSafety(1, 3, crypto, ledger, tree)
-	if !safety.ValidTC(tc) {
-		t.Fatal("the TC produced by ProcessRemoteTimeout does not verify under Safety.ValidTC")
+	if !NewVerifier(nocrypto.New(1, 4), 3).VerifyTC(tc) {
+		t.Fatal("the TC produced by ProcessRemoteTimeout does not verify at the edge")
+	}
+}
+
+// TestLocalTimeoutRoundDropsRedundantTC pins a gap between two parts of the
+// paper. local_timeout_round (3.5) broadcasts last_round_tc unconditionally,
+// but the well-formedness rule says a round-r message carries the TC of r-1
+// exactly when its certificate is not from r-1 — so a replica holding both a
+// TC for r-1 and a QC for r-1 broadcasts a timeout every honest replica
+// discards, and its contribution to the round's TC is silently lost.
+//
+// The state is reachable and provoked here deterministically: enter round 3 on
+// a TC for round 2, then take a late QC for round 2. advance_round_qc returns
+// false without clearing last_round_tc, which is the paper's own text, while
+// BlockTree.process_qc has already raised high_qc.
+func TestLocalTimeoutRoundDropsRedundantTC(t *testing.T) {
+	pm, _, net, _ := newTestPacemaker(t, testN)
+
+	if !pm.AdvanceRoundTC(makeTC(2, 1, 1, 1)) {
+		t.Fatal("AdvanceRoundTC(TC for round 2) = false, want the replica to enter round 3")
+	}
+	qc := makeQC(VoteInfo{ID: Hash{1}, Round: 2, ParentRound: 1}, Hash{}, 1, 2, 3)
+	pm.tree.ProcessQC(qc)
+	if pm.AdvanceRoundQC(qc) {
+		t.Fatal("AdvanceRoundQC(QC for round 2) = true, want a certificate below the current round to change nothing")
+	}
+
+	pm.LocalTimeoutRound()
+
+	if len(net.timeouts) != 1 {
+		t.Fatalf("broadcast %d timeouts, want 1", len(net.timeouts))
+	}
+	if m := net.timeouts[0]; !m.WellFormed() {
+		t.Fatalf("broadcast an ill-formed timeout: round %d over a high_qc for round %d, carrying a TC for round %d; every honest replica discards it",
+			m.TmoInfo.Round, m.TmoInfo.HighQC.Round(), m.LastRoundTC.Round)
 	}
 }

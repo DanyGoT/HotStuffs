@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/consensus"
 	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 	"github.com/DanyGoT/HotStuffs/internal/fake"
@@ -19,11 +18,13 @@ type sim struct {
 	ids   []ID
 
 	cores   map[ID]*Core
+	vers    map[ID]*Verifier
 	pools   map[ID]*FIFOPool
 	commits map[ID][]*Block
 	down    map[ID]bool
 
-	queue []func()
+	queue    []func()
+	rejected int
 }
 
 const (
@@ -40,6 +41,7 @@ func newSim(t *testing.T, n int, down ...ID) *sim {
 		t:       t,
 		clock:   fake.NewClock(time.Unix(0, 0)),
 		cores:   map[ID]*Core{},
+		vers:    map[ID]*Verifier{},
 		pools:   map[ID]*FIFOPool{},
 		commits: map[ID][]*Block{},
 		down:    map[ID]bool{},
@@ -55,28 +57,58 @@ func newSim(t *testing.T, n int, down ...ID) *sim {
 		ledger.OnCommit = func(b *Block) { s.commits[id] = append(s.commits[id], b) }
 		pool := NewFIFOPool(1024, 2)
 		s.pools[id] = pool
+		s.vers[id] = NewVerifier(nocrypto.New(id, n), hotstuff.QuorumSize(n))
 		s.cores[id] = New(Config{
-			ID:         id,
-			Validators: s.ids,
-			Ledger:     ledger,
-			MemPool:    pool,
-			Crypto:     nocrypto.New(id, n),
-			Transport:  &simNet{s: s},
-			Clock:      s.clock,
-			Duration:   consensus.NewViewDuration(simRoundBase, simRoundMax, 2),
-			Sink:       simSink{s: s, id: id},
+			ID:           id,
+			Validators:   s.ids,
+			Ledger:       ledger,
+			Transactions: pool.GetTransactions,
+			Crypto:       nocrypto.New(id, n),
+			Transport:    &simNet{s: s},
+			Clock:        s.clock,
+			Duration:     hotstuff.NewDuration(simRoundBase, simRoundMax, 2),
+			Sink:         func(e Event) { s.deliver(id, e) },
 		})
 	}
 	return s
 }
 
-// deliver queues a step on one replica. A replica that is down receives
-// nothing, which is how a crash fault is modelled.
+// deliver queues a step on one replica, but only for a message that passes that
+// replica's edge verification: the harness stands in for the network handler
+// goroutine, which is where authentication happens. A replica that is down
+// receives nothing, which is how a crash fault is modelled.
 func (s *sim) deliver(to ID, e Event) {
 	if s.down[to] {
 		return
 	}
+	if !s.verify(to, e) {
+		s.rejected++
+		return
+	}
 	s.queue = append(s.queue, func() { s.cores[to].Step(e) })
+}
+
+func (s *sim) verify(to ID, e Event) bool {
+	v := s.vers[to]
+	switch e := e.(type) {
+	case ProposalEvent:
+		return v.VerifyProposal(e.Msg)
+	case VoteEvent:
+		return v.VerifyVote(e.Msg)
+	case TimeoutEvent:
+		return v.VerifyTimeout(e.Msg)
+	}
+	return true // LocalTimeoutEvent is this replica's own timer, not a message
+}
+
+// checkNoRejections is the point of counting. Every replica here is honest and
+// no message is corrupted in flight, so anything the edge rejects is something
+// an honest replica built and its peers would discard.
+func (s *sim) checkNoRejections() {
+	s.t.Helper()
+	if s.rejected != 0 {
+		s.t.Fatalf("edge verification rejected %d honest messages", s.rejected)
+	}
 }
 
 func (s *sim) broadcast(e Event) {
@@ -88,6 +120,8 @@ func (s *sim) broadcast(e Event) {
 // run starts every live replica and processes at most steps deliveries,
 // advancing the clock whenever the queue runs dry.
 func (s *sim) run(steps int) {
+	s.t.Helper()
+	defer s.checkNoRejections()
 	for _, id := range s.ids {
 		if !s.down[id] {
 			s.cores[id].Start()
@@ -111,13 +145,6 @@ type simNet struct{ s *sim }
 func (n *simNet) Proposal(p *ProposalMsg) { n.s.broadcast(ProposalEvent{Msg: p}) }
 func (n *simNet) Vote(v *VoteMsg, to ID)  { n.s.deliver(to, VoteEvent{Msg: v}) }
 func (n *simNet) Timeout(m *TimeoutMsg)   { n.s.broadcast(TimeoutEvent{Msg: m}) }
-
-type simSink struct {
-	s  *sim
-	id ID
-}
-
-func (k simSink) Push(e Event) { k.s.deliver(k.id, e) }
 
 // live is the replicas that were not crashed.
 func (s *sim) live() []ID {
@@ -255,10 +282,6 @@ func (n *dupNet) Proposal(*ProposalMsg) { n.proposals++ }
 func (n *dupNet) Vote(*VoteMsg, ID)     { n.votes++ }
 func (n *dupNet) Timeout(*TimeoutMsg)   { n.timeouts++ }
 
-type nopSink struct{}
-
-func (nopSink) Push(Event) {}
-
 // TestDuplicateTimeoutDoesNotRetrigger pins the one place this implementation
 // departs from process_remote_timeout: the paper's f+1 and 2f+1 tests sit
 // outside the duplicate-sender guard, so a resent timeout runs them again on an
@@ -272,15 +295,15 @@ func TestDuplicateTimeoutDoesNotRetrigger(t *testing.T) {
 	ledger := NewMemLedger()
 	signer := nocrypto.New(1, n)
 	tree := NewBlockTree(1, quorum, ledger, signer)
-	safety := NewSafety(1, quorum, signer, ledger, tree)
+	safety := NewSafety(1, NewVerifier(signer, quorum), signer, ledger, tree)
 	net := &dupNet{}
 	pm := NewPacemaker(quorum, faulty, fake.NewClock(time.Unix(0, 0)),
-		consensus.NewViewDuration(simRoundBase, simRoundMax, 2), nopSink{}, net, safety, tree)
+		hotstuff.NewDuration(simRoundBase, simRoundMax, 2), func(Event) {}, net, safety, tree)
 	pm.AdvanceRoundQC(genesisQC) // round 1
 
 	timeout := func(from ID) *TimeoutMsg {
 		t.Helper()
-		s := NewSafety(from, quorum, nocrypto.New(from, n), NewMemLedger(), tree)
+		s := NewSafety(from, NewVerifier(nocrypto.New(from, n), quorum), nocrypto.New(from, n), NewMemLedger(), tree)
 		info := s.MakeTimeout(1, genesisQC, nil)
 		if info == nil {
 			t.Fatalf("replica %d refused to time out round 1", from)

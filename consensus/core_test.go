@@ -26,7 +26,7 @@ type harness struct {
 	clk   *fake.Clock
 	store *blockchain.Store
 	log   *hotstuff.MemLog
-	dur   *ExponentialDuration
+	dur   *hotstuff.Duration
 	cmds  *fake.Commands
 	id    hotstuff.ID
 	n     int

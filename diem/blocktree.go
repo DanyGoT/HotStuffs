@@ -10,11 +10,12 @@ import (
 type BlockTree struct {
 	id     ID
 	quorum int
-	ledger Ledger
+	ledger *MemLedger
 	crypto Crypto
 
 	pending map[Hash]*Block
 	votes   map[Hash]*voteBucket
+	voters  map[voterKey]struct{}
 
 	highQC       *QC
 	highCommitQC *QC
@@ -28,11 +29,22 @@ type voteBucket struct {
 	voteInfo VoteInfo
 	commit   LedgerCommitInfo
 	sigs     []Signature
-	signers  map[ID]struct{}
+}
+
+// voterKey is one replica's vote slot for a round. An honest replica votes at
+// most once per round — safeToVote requires the block's round to exceed
+// highest_vote_round, which never decreases — so one entry per (round, signer)
+// is all that can ever be legitimate. Enforcing it across buckets is what
+// bounds the accumulator: the bucket key is a digest over fields its sender
+// chooses, so a signer who varies one of them opens a bucket per message
+// without ever repeating itself inside one.
+type voterKey struct {
+	round  Round
+	signer ID
 }
 
 // NewBlockTree returns a block tree holding only the genesis certificate.
-func NewBlockTree(id ID, quorum int, ledger Ledger, crypto Crypto) *BlockTree {
+func NewBlockTree(id ID, quorum int, ledger *MemLedger, crypto Crypto) *BlockTree {
 	return &BlockTree{
 		id:           id,
 		quorum:       quorum,
@@ -40,6 +52,7 @@ func NewBlockTree(id ID, quorum int, ledger Ledger, crypto Crypto) *BlockTree {
 		crypto:       crypto,
 		pending:      map[Hash]*Block{},
 		votes:        map[Hash]*voteBucket{},
+		voters:       map[voterKey]struct{}{},
 		highQC:       genesisQC,
 		highCommitQC: genesisQC,
 	}
@@ -52,7 +65,10 @@ func (t *BlockTree) HighQC() *QC { return t.highQC }
 // on every outgoing message so a lagging replica catches up on commits.
 func (t *BlockTree) HighCommitQC() *QC { return t.highCommitQC }
 
-// Block returns a pending block by id.
+// Block returns a pending block by id. The protocol never calls it: the paper's
+// pending_block_tree (3.3) is read only by prune. It is kept as the one read
+// path into the tree — what a block-sync responder would serve from, and what
+// the pruning tests assert against.
 func (t *BlockTree) Block(id Hash) (*Block, bool) {
 	b, ok := t.pending[id]
 	return b, ok
@@ -89,41 +105,39 @@ func (t *BlockTree) ExecuteAndInsert(b *Block) {
 func (t *BlockTree) ProcessVote(v *VoteMsg) *QC {
 	t.ProcessQC(v.HighCommitQC)
 
+	vk := voterKey{round: v.VoteInfo.Round, signer: v.Sender}
+	if _, voted := t.voters[vk]; voted {
+		return nil
+	}
 	idx := LedgerCommitDigest(v.LedgerCommitInfo)
 	b := t.votes[idx]
 	if b == nil {
-		b = &voteBucket{
-			voteInfo: v.VoteInfo,
-			commit:   v.LedgerCommitInfo,
-			signers:  map[ID]struct{}{},
-		}
+		b = &voteBucket{voteInfo: v.VoteInfo, commit: v.LedgerCommitInfo}
 		t.votes[idx] = b
 	}
-	if _, voted := b.signers[v.Sender]; voted {
-		return nil
-	}
-	b.signers[v.Sender] = struct{}{}
+	t.voters[vk] = struct{}{}
 	b.sigs = append(b.sigs, v.Sig)
 	if len(b.sigs) < t.quorum {
 		return nil
 	}
 
 	sigs := canonical(b.sigs)
-	qc := &QC{
+	// The author signature certifies nothing the quorum does not. It names who
+	// assembled this particular set, which is what an equivocating aggregator
+	// can then be held to. Every receiver checks it, so a certificate that
+	// cannot carry one is a certificate nobody would accept.
+	authorSig, err := t.crypto.Sign(qcSigsDigest(sigs))
+	if err != nil {
+		return nil
+	}
+	delete(t.votes, idx) // the certificate exists; further votes for it are dead weight
+	return &QC{
 		VoteInfo:         b.voteInfo,
 		LedgerCommitInfo: b.commit,
 		Signatures:       sigs,
 		Author:           t.id,
+		AuthorSig:        authorSig,
 	}
-	// The author signature certifies nothing the quorum does not. It names who
-	// assembled this particular set, which is what an equivocating aggregator
-	// can then be held to. A signing failure is not worth dropping the QC for:
-	// every receiver still verifies the quorum itself.
-	if sig, err := t.crypto.Sign(qcSigsDigest(sigs)); err == nil {
-		qc.AuthorSig = sig
-	}
-	delete(t.votes, idx) // the certificate exists; further votes for it are dead weight
-	return qc
 }
 
 // GenerateBlock is the paper's generate_block: a block for round over the
@@ -163,6 +177,11 @@ func (t *BlockTree) prune(rootID Hash, rootRound Round) {
 	for idx, b := range t.votes {
 		if b.voteInfo.Round <= rootRound {
 			delete(t.votes, idx)
+		}
+	}
+	for vk := range t.voters {
+		if vk.round <= rootRound {
+			delete(t.voters, vk)
 		}
 	}
 }

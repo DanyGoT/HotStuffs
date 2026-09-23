@@ -26,7 +26,7 @@ func newSafetyFixture(id ID) *safetyFixture {
 	crypto := nocrypto.New(id, testN)
 	tree := NewBlockTree(id, testQuorum, ledger, crypto)
 	return &safetyFixture{
-		safety: NewSafety(id, testQuorum, crypto, ledger, tree),
+		safety: NewSafety(id, NewVerifier(crypto, testQuorum), crypto, ledger, tree),
 		ledger: ledger,
 		crypto: crypto,
 	}
@@ -50,7 +50,7 @@ func makeTC(round Round, highQCRounds ...Round) *TC {
 }
 
 // makeQC builds a QC over voteInfo whose LedgerCommitInfo is correctly bound
-// to it, signed by signerIDs.
+// to it, signed by signerIDs and assembled by the first of them.
 func makeQC(voteInfo VoteInfo, commitStateID Hash, signerIDs ...ID) *QC {
 	commit := LedgerCommitInfo{CommitStateID: commitStateID, VoteInfoHash: VoteInfoHash(voteInfo)}
 	digest := LedgerCommitDigest(commit)
@@ -58,7 +58,14 @@ func makeQC(voteInfo VoteInfo, commitStateID Hash, signerIDs ...ID) *QC {
 	for i, id := range signerIDs {
 		sigs[i] = signAs(id, digest)
 	}
-	return &QC{VoteInfo: voteInfo, LedgerCommitInfo: commit, Signatures: sigs}
+	author := signerIDs[0]
+	return &QC{
+		VoteInfo:         voteInfo,
+		LedgerCommitInfo: commit,
+		Signatures:       sigs,
+		Author:           author,
+		AuthorSig:        signAs(author, qcSigsDigest(sigs)),
+	}
 }
 
 func TestConsecutive(t *testing.T) {
@@ -261,85 +268,6 @@ func TestMakeTimeout(t *testing.T) {
 		digest := TimeoutDigest(to.Round, to.HighQC.Round())
 		if !f.crypto.Verify(digest, to.Sig) {
 			t.Error("timeout signature does not verify against TimeoutDigest(round, highQC.Round())")
-		}
-	})
-}
-
-func TestValidQC(t *testing.T) {
-	f := newSafetyFixture(1)
-
-	t.Run("nil is invalid", func(t *testing.T) {
-		if f.safety.ValidQC(nil) {
-			t.Error("ValidQC(nil) = true, want false")
-		}
-	})
-
-	t.Run("genesis qc is valid", func(t *testing.T) {
-		if !f.safety.ValidQC(GenesisQC()) {
-			t.Error("ValidQC(GenesisQC()) = false, want true")
-		}
-	})
-
-	t.Run("vote info not bound to the ledger commit info is rejected", func(t *testing.T) {
-		voteInfo := VoteInfo{ID: GenesisBlock().ID(), Round: 1}
-		qc := makeQC(voteInfo, Hash{}, 1, 2, 3)
-		qc.VoteInfo.Round = 2 // tamper after the commit hash was computed over Round: 1
-		if f.safety.ValidQC(qc) {
-			t.Error("ValidQC = true for a QC whose VoteInfo does not match its LedgerCommitInfo hash")
-		}
-	})
-
-	t.Run("too few signatures is rejected", func(t *testing.T) {
-		voteInfo := VoteInfo{ID: GenesisBlock().ID(), Round: 1}
-		qc := makeQC(voteInfo, Hash{}, 1, 2) // quorum is 3
-		if f.safety.ValidQC(qc) {
-			t.Error("ValidQC = true below quorum, want false")
-		}
-	})
-}
-
-func TestValidTC(t *testing.T) {
-	f := newSafetyFixture(1)
-
-	t.Run("nil is valid", func(t *testing.T) {
-		if !f.safety.ValidTC(nil) {
-			t.Error("ValidTC(nil) = false, want true")
-		}
-	})
-
-	t.Run("duplicate signers rejected", func(t *testing.T) {
-		tc := &TC{Round: 5, Votes: []TimeoutVote{
-			{HighQCRound: 3, Sig: signAs(1, TimeoutDigest(5, 3))},
-			{HighQCRound: 3, Sig: signAs(1, TimeoutDigest(5, 3))},
-			{HighQCRound: 4, Sig: signAs(2, TimeoutDigest(5, 4))},
-		}}
-		if f.safety.ValidTC(tc) {
-			t.Error("ValidTC = true with a duplicate signer, want false")
-		}
-	})
-
-	t.Run("wrong-digest signature rejected", func(t *testing.T) {
-		tc := &TC{Round: 5, Votes: []TimeoutVote{
-			{HighQCRound: 3, Sig: signAs(1, TimeoutDigest(5, 3))},
-			{HighQCRound: 4, Sig: signAs(2, TimeoutDigest(99, 4))}, // signed a different round
-			{HighQCRound: 5, Sig: signAs(3, TimeoutDigest(5, 5))},
-		}}
-		if f.safety.ValidTC(tc) {
-			t.Error("ValidTC = true with a signature over the wrong digest, want false")
-		}
-	})
-
-	t.Run("below quorum rejected", func(t *testing.T) {
-		tc := makeTC(5, 3, 4) // 2 signers, quorum is 3
-		if f.safety.ValidTC(tc) {
-			t.Error("ValidTC = true below quorum, want false")
-		}
-	})
-
-	t.Run("quorum of distinct signers accepted", func(t *testing.T) {
-		tc := makeTC(5, 3, 4, 5)
-		if !f.safety.ValidTC(tc) {
-			t.Error("ValidTC = false for a valid quorum, want true")
 		}
 	})
 }
