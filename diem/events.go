@@ -34,5 +34,3 @@ func NewQueue(size int) Queue { return make(Queue, size) }
 
 // Push blocks when the queue is full. It never drops.
 func (q Queue) Push(e Event) { q <- e }
-
-var _ EventSink = Queue(nil)

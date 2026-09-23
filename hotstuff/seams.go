@@ -29,31 +29,6 @@ type Transport interface {
 	Fetch(Hash)
 }
 
-// Rules is the protocol variant: the three decisions that differ between
-// HotStuff flavours. Every method is a pure function of the snapshot it is
-// given plus the block store, which is what makes it table-testable.
-type Rules interface {
-	VoteRule(State, Proposal) bool
-	// CommitRule returns the highest block committed as a consequence of b
-	// being stored, or nil. If the decision needs an absent ancestor it returns
-	// (nil, thatHash); otherwise missing is the zero Hash.
-	CommitRule(State, *Block) (commit *Block, missing Hash)
-	// ProposeRule builds this replica's proposal for the current view. The
-	// returned Proposal is unsigned: signing is the caller's job, so the rules
-	// stay crypto-free.
-	ProposeRule(State, [][]byte, *TimeoutCert) (Proposal, bool)
-}
-
-// BlockStore is the content-addressed block store.
-type BlockStore interface {
-	Get(Hash) (*Block, bool)
-	Put(*Block)
-	// Prune drops every block that can no longer be committed — one whose view
-	// is at or below head's and that is not an ancestor of head — and returns
-	// them. Those are abandoned forks, which a client layer may want to abort.
-	Prune(head Hash) []*Block
-}
-
 // Crypto signs and verifies message digests. A QuorumCert is just a slice of
 // signatures, so there is no separate combine step.
 type Crypto interface {
@@ -81,14 +56,6 @@ type Clock interface {
 
 // Timer is a pending Clock.AfterFunc callback.
 type Timer interface{ Stop() bool }
-
-// ViewDuration is the view timer's backoff policy.
-type ViewDuration interface {
-	Duration() time.Duration
-	ViewStarted()
-	ViewSucceeded()
-	ViewTimedOut()
-}
 
 // CommandQueue is the source of commands to propose. Poll must not block; it
 // reports false when there is nothing to propose.

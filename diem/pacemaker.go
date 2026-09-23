@@ -1,5 +1,12 @@
 package diem
 
+import (
+	"cmp"
+	"slices"
+
+	"github.com/DanyGoT/HotStuffs/hotstuff"
+)
+
 // Pacemaker is the paper's Pacemaker module (3.5): it advances rounds and
 // keeps liveness. On the happy path it advances on the certificates carried by
 // proposals; on the recovery path it observes a round making no progress and
@@ -9,8 +16,8 @@ type Pacemaker struct {
 	faulty int
 
 	clock  Clock
-	dur    RoundDuration
-	sink   EventSink
+	dur    *hotstuff.Duration
+	sink   func(Event)
 	net    Transport
 	safety *Safety
 	tree   *BlockTree
@@ -30,7 +37,7 @@ type timeoutBucket struct {
 
 // NewPacemaker returns a pacemaker at round 0 with no timer armed. Start on
 // Core does the first advance.
-func NewPacemaker(quorum, faulty int, clock Clock, dur RoundDuration, sink EventSink, net Transport, safety *Safety, tree *BlockTree) *Pacemaker {
+func NewPacemaker(quorum, faulty int, clock Clock, dur *hotstuff.Duration, sink func(Event), net Transport, safety *Safety, tree *BlockTree) *Pacemaker {
 	return &Pacemaker{
 		quorum:          quorum,
 		faulty:          faulty,
@@ -61,8 +68,8 @@ func (p *Pacemaker) Stop() {
 
 // startTimer enters newRound and arms its timer. The paper leaves the duration
 // formula open — "4*delta, or alpha + beta*commit_gap(r) if delta is unknown" —
-// so it is a seam here, and the default is the exponential backoff both
-// protocols in this repository share.
+// and this takes the exponential backoff both protocols in this repository
+// share.
 func (p *Pacemaker) startTimer(newRound Round) {
 	p.Stop()
 	p.currentRound = newRound
@@ -74,7 +81,7 @@ func (p *Pacemaker) startTimer(newRound Round) {
 	p.dur.ViewStarted()
 	// The callback runs off the consensus goroutine, so it may only enqueue.
 	p.timer = p.clock.AfterFunc(p.dur.Duration(), func() {
-		p.sink.Push(LocalTimeoutEvent{Round: newRound})
+		p.sink(LocalTimeoutEvent{Round: newRound})
 	})
 }
 
@@ -88,9 +95,15 @@ func (p *Pacemaker) LocalTimeoutRound() {
 	if info == nil {
 		return
 	}
+	// The paper broadcasts last_round_tc unconditionally (3.5,
+	// local_timeout_round), which its own well-formedness rule then rejects
+	// whenever high_qc is from round-1: advance_round_qc leaves last_round_tc
+	// set when it declines a certificate below the current round, so a replica
+	// can hold both. The TC is dropped here for the same reason Core drops it
+	// from a proposal, and by the same rule.
 	p.net.Timeout(&TimeoutMsg{
 		TmoInfo:      *info,
-		LastRoundTC:  p.lastRoundTC,
+		LastRoundTC:  justifyingTC(info.HighQC.Round(), info.Round, p.lastRoundTC),
 		HighCommitQC: p.tree.HighCommitQC(),
 	})
 	// Re-arm. The paper stops the timer here and relies on a TC arriving; a
@@ -136,6 +149,11 @@ func (p *Pacemaker) ProcessRemoteTimeout(tmo *TimeoutMsg) *TC {
 		for _, i := range b.infos {
 			votes = append(votes, TimeoutVote{HighQCRound: i.HighQC.Round(), Sig: i.Sig})
 		}
+		// Signer order is canonical for the same reason BlockTree.canonical
+		// sorts a QC's signatures: one certificate has one wire form, and a
+		// receiver rejects anything else. Timeouts arrive in whatever order the
+		// network delivers them, so this is not already sorted.
+		slices.SortFunc(votes, func(a, b TimeoutVote) int { return cmp.Compare(a.Sig.Signer, b.Sig.Signer) })
 		return &TC{Round: info.Round, Votes: votes}
 	}
 	return nil

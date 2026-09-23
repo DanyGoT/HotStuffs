@@ -20,7 +20,7 @@ type LeaderElection struct {
 	windowSize  int
 	excludeSize int
 
-	ledger    Ledger
+	ledger    *MemLedger
 	pacemaker *Pacemaker
 
 	reputationLeaders map[Round]ID
@@ -30,7 +30,7 @@ type LeaderElection struct {
 // is sorted, so every replica indexes the same rotation. windowSize is how far
 // back the active set is read; excludeSize is how many recent commit authors
 // are held out of it, and the paper puts it between f and 2f.
-func NewLeaderElection(validators []ID, windowSize, excludeSize int, ledger Ledger, pacemaker *Pacemaker) *LeaderElection {
+func NewLeaderElection(validators []ID, windowSize, excludeSize int, ledger *MemLedger, pacemaker *Pacemaker) *LeaderElection {
 	v := slices.Clone(validators)
 	slices.Sort(v)
 	return &LeaderElection{

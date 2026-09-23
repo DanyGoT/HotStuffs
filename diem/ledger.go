@@ -1,6 +1,6 @@
 package diem
 
-// MemLedger is an in-memory Ledger (paper 3.2): a branching tree of
+// MemLedger is the in-memory ledger (paper 3.2): a branching tree of
 // speculative states extending the last committed one, plus the committed
 // blocks LeaderElection walks back over.
 //
@@ -58,9 +58,20 @@ func NewMemLedger() *MemLedger {
 }
 
 // Speculate executes b over its parent's state. A parent this replica never
-// speculated leaves nothing stored and returns the zero state: DiemBFT has no
-// block-sync in the paper, so a replica that missed an ancestor simply cannot
-// vote, and PendingState reporting false is how Safety learns that.
+// speculated leaves nothing stored and returns the zero state, and this is
+// where the paper's missing block-sync lands.
+//
+// Section 3 defines no way to fetch a block, so a replica that loses one
+// proposal cannot speculate it, cannot vote on it, and cannot speculate its
+// children either. Commit cannot walk back across the gap to move the frontier,
+// so it does not recover: the replica is out of the quorum for good. The
+// protocol is shipped as written rather than extended with a sync path, and
+// PendingState reporting false is how Safety learns to decline —
+// Safety.DeclinedMissingAncestor counts what that costs.
+//
+// The paper's signature is speculate(prev_block_id, block_id, txns). All
+// three are fields of b, and committed_block must hand a whole block back,
+// so the ledger has to hold the block in any case.
 func (l *MemLedger) Speculate(b *Block) Hash {
 	prev, ok := l.PendingState(b.ParentID())
 	if !ok {
@@ -148,5 +159,3 @@ func (l *MemLedger) forget() {
 		}
 	}
 }
-
-var _ Ledger = (*MemLedger)(nil)

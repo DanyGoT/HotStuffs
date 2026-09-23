@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/DanyGoT/HotStuffs/blockchain"
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 	"github.com/DanyGoT/HotStuffs/proto/hotstuffpb"
 	"github.com/relab/gorums"
@@ -23,7 +24,7 @@ type Config struct {
 	Listen   string            // ":0" picks a free port; read it back with Addr
 	Sink     hotstuff.EventSink
 	Verifier *hotstuff.Verifier
-	Store    hotstuff.BlockStore
+	Store    *blockchain.Store
 
 	OutQueue      int           // outbound queue depth; 0 picks a default
 	FetchTimeout  time.Duration // bounds one backfill quorum call; 0 picks a default

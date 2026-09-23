@@ -14,8 +14,9 @@ type Core struct {
 	id     ID
 	crypto Crypto
 	net    Transport
-	pool   MemPool
 	clock  Clock
+
+	transactions func() [][]byte
 
 	tree      *BlockTree
 	safety    *Safety
@@ -25,18 +26,25 @@ type Core struct {
 	observe func(Event, State, time.Duration)
 }
 
-// Config is everything a Core needs. Every field is required except Observer,
-// WindowSize and ExcludeSize.
+// Config is everything a Core needs. Every field is required except
+// Transactions, Observer, WindowSize and ExcludeSize.
 type Config struct {
 	ID         ID
 	Validators []ID
-	Ledger     Ledger
-	MemPool    MemPool
+	Ledger     *MemLedger
 	Crypto     Crypto
 	Transport  Transport
 	Clock      Clock
-	Duration   RoundDuration
-	Sink       EventSink
+	Duration   *hotstuff.Duration
+
+	// Sink accepts events from any goroutine. Only the round timer uses it:
+	// its callback runs off the consensus goroutine, so it may enqueue and
+	// nothing else. Production passes Queue.Push.
+	Sink func(Event)
+
+	// Transactions supplies the payload for a leader's proposal (paper 3.6).
+	// Nil proposes empty blocks, which still commits the pipeline below them.
+	Transactions func() [][]byte
 
 	// WindowSize is how far back LeaderElection reads the active set;
 	// ExcludeSize is how many recent commit authors it holds out, which the
@@ -57,6 +65,11 @@ type State struct {
 	HighCommitRound  Round
 	HighestVoteRound Round
 	HighestQCRound   Round
+
+	// DeclinedMissingAncestor is monotonic. A rate taken over it is the rate at
+	// which this replica lost a vote to a gap in its own chain, which is the
+	// standing cost of the paper having no block-sync.
+	DeclinedMissingAncestor uint64
 }
 
 // New wires the modules together. The dependency order is the paper's: the
@@ -76,16 +89,18 @@ func New(cfg Config) *Core {
 	}
 
 	tree := NewBlockTree(cfg.ID, quorum, cfg.Ledger, cfg.Crypto)
-	safety := NewSafety(cfg.ID, quorum, cfg.Crypto, cfg.Ledger, tree)
+	safety := NewSafety(cfg.ID, NewVerifier(cfg.Crypto, quorum), cfg.Crypto, cfg.Ledger, tree)
 	pacemaker := NewPacemaker(quorum, faulty, cfg.Clock, cfg.Duration, cfg.Sink, cfg.Transport, safety, tree)
 	leaders := NewLeaderElection(cfg.Validators, window, exclude, cfg.Ledger, pacemaker)
 
 	return &Core{
-		id:        cfg.ID,
-		crypto:    cfg.Crypto,
-		net:       cfg.Transport,
-		pool:      cfg.MemPool,
-		clock:     cfg.Clock,
+		id:     cfg.ID,
+		crypto: cfg.Crypto,
+		net:    cfg.Transport,
+		clock:  cfg.Clock,
+
+		transactions: cfg.Transactions,
+
 		tree:      tree,
 		safety:    safety,
 		pacemaker: pacemaker,
@@ -98,6 +113,16 @@ func New(cfg Config) *Core {
 // back over. Large enough that a replica missing from the active set really
 // has been quiet, small enough to stay inside the ledger's retention.
 const defaultWindowSize = 10
+
+// maxRoundLead is how far ahead of the current round an inbound vote may claim
+// before this replica stops accumulating it. A vote is bucketed by the digest
+// of a LedgerCommitInfo its sender picks freely, and nothing a receiver can
+// check binds the round it claims to anything, so one sender opens one bucket
+// per message and only a commit — needing a quorum those votes can never
+// reach — would prune them. A round no certificate has been seen for is a round
+// nothing can be aggregated in anyway, and catching up does not depend on these
+// votes: a certificate rides on every proposal and every timeout.
+const maxRoundLead = 4
 
 // Start enters round 1 on the genesis certificate and arms the round timer.
 // The paper leaves bootstrap unspecified; this is the smallest thing that
@@ -118,6 +143,8 @@ func (c *Core) State() State {
 		HighCommitRound:  c.tree.HighCommitQC().Round(),
 		HighestVoteRound: c.safety.HighestVoteRound(),
 		HighestQCRound:   c.safety.HighestQCRound(),
+
+		DeclinedMissingAncestor: c.safety.DeclinedMissingAncestor(),
 	}
 }
 
@@ -136,6 +163,13 @@ func (c *Core) Step(e Event) {
 	case TimeoutEvent:
 		c.processTimeoutMsg(e.Msg)
 	case LocalTimeoutEvent:
+		// The paper dispatches this unconditionally (3.1, start_event_processing:
+		// local timeout -> Pacemaker.local_timeout_round()). The round is checked
+		// first because the timer callback runs off this goroutine and only
+		// enqueues: a callback that had already fired when startTimer or Stop
+		// disarmed the timer is still sitting in the queue, and running it would
+		// abandon a round the replica has since entered on a perfectly good
+		// certificate.
 		if e.Round == c.pacemaker.CurrentRound() {
 			c.pacemaker.LocalTimeoutRound()
 		}
@@ -154,17 +188,17 @@ func (c *Core) processCertificateQC(qc *QC) {
 	c.pacemaker.AdvanceRoundQC(qc)
 }
 
+// processProposalMsg is the paper's process_proposal_msg. Authentication has
+// already happened at the edge, on the goroutine the message arrived on, so
+// what is left here is authorization by protocol state.
 func (c *Core) processProposalMsg(p *ProposalMsg) {
-	// Well-formedness and signatures are checked before anything is allowed to
-	// touch state. The paper leaves this to "other parts of the system"; here
-	// it is the event loop, and Safety checks again on its own behalf.
-	if !p.WellFormed() || !c.validProposal(p) {
-		return
-	}
 	c.processCertificateQC(p.Block.QC)
 	c.processCertificateQC(p.HighCommitQC)
 	c.pacemaker.AdvanceRoundTC(p.LastRoundTC)
 
+	// The one message check that cannot move to the edge: GetLeader (3.7) reads
+	// the committed blocks for its reputation path, so who leads a round is a
+	// function of protocol state, not of the round number.
 	round := c.pacemaker.CurrentRound()
 	leader := c.leaders.GetLeader(round)
 	if p.Block.Round != round || p.Sender != leader || p.Block.Author != leader {
@@ -182,9 +216,6 @@ func (c *Core) processProposalMsg(p *ProposalMsg) {
 }
 
 func (c *Core) processTimeoutMsg(m *TimeoutMsg) {
-	if !m.WellFormed() || !c.validTimeout(m) {
-		return
-	}
 	c.processCertificateQC(m.TmoInfo.HighQC)
 	c.processCertificateQC(m.HighCommitQC)
 	c.pacemaker.AdvanceRoundTC(m.LastRoundTC)
@@ -198,7 +229,7 @@ func (c *Core) processTimeoutMsg(m *TimeoutMsg) {
 }
 
 func (c *Core) processVoteMsg(m *VoteMsg) {
-	if !c.validVote(m) {
+	if m.VoteInfo.Round > c.pacemaker.CurrentRound()+maxRoundLead {
 		return
 	}
 	qc := c.tree.ProcessVote(m)
@@ -218,7 +249,11 @@ func (c *Core) processNewRoundEvent(lastTC *TC) {
 	if c.leaders.GetLeader(round) != c.id {
 		return
 	}
-	b := c.tree.GenerateBlock(c.pool.GetTransactions(), round)
+	var txns [][]byte
+	if c.transactions != nil {
+		txns = c.transactions()
+	}
+	b := c.tree.GenerateBlock(txns, round)
 	sig, err := c.crypto.Sign(b.ID())
 	if err != nil {
 		return
@@ -241,37 +276,3 @@ func justifyingTC(qcRound, round Round, tc *TC) *TC {
 	}
 	return tc
 }
-
-func (c *Core) validProposal(p *ProposalMsg) bool {
-	if p.Sig.Signer != p.Sender || !c.crypto.Verify(p.Block.ID(), p.Sig) {
-		return false
-	}
-	return c.safety.ValidQC(p.Block.QC) && c.validCommitQC(p.HighCommitQC) && c.safety.ValidTC(p.LastRoundTC)
-}
-
-func (c *Core) validTimeout(m *TimeoutMsg) bool {
-	t := m.TmoInfo
-	if t.Sig.Signer != t.Sender || !c.crypto.Verify(TimeoutDigest(t.Round, t.HighQC.Round()), t.Sig) {
-		return false
-	}
-	return c.safety.ValidQC(t.HighQC) && c.validCommitQC(m.HighCommitQC) && c.safety.ValidTC(m.LastRoundTC)
-}
-
-func (c *Core) validVote(m *VoteMsg) bool {
-	if m.Sig.Signer != m.Sender {
-		return false
-	}
-	// The vote signs the LedgerCommitInfo alone, so the VoteInfo it ships with
-	// is only authenticated through the hash inside it.
-	if VoteInfoHash(m.VoteInfo) != m.LedgerCommitInfo.VoteInfoHash {
-		return false
-	}
-	if !c.crypto.Verify(LedgerCommitDigest(m.LedgerCommitInfo), m.Sig) {
-		return false
-	}
-	return c.validCommitQC(m.HighCommitQC)
-}
-
-// validCommitQC accepts an absent commit certificate: it is a catch-up hint,
-// not evidence anything depends on.
-func (c *Core) validCommitQC(qc *QC) bool { return qc == nil || c.safety.ValidQC(qc) }
