@@ -1,5 +1,8 @@
-// Command hotstuff runs one Chained HotStuff replica, or a whole cluster in a
-// single process with -local.
+// Command hotstuff runs one replica, or a whole cluster in a single process
+// with -local. -protocol picks which of the two protocols in this repository it
+// runs: Chained HotStuff or DiemBFT. One binary rather than two, because the
+// flag contract, the key generation, the addressing and the NDJSON sampling are
+// identical and only the constructor differs.
 //
 // The flag names follow benchkit.StandardFlags so that benchkit/cmd/sweep can
 // drive this binary across a cluster later. Adopting the contract costs
@@ -34,6 +37,7 @@ import (
 
 var (
 	// Acted on.
+	protocol       = flag.String("protocol", protoHotStuff, "consensus protocol: hotstuff or diem")
 	local          = flag.Int("local", 0, "run this many replicas in one process")
 	self           = flag.String("self", "", "this replica's address, which must appear in -remotes")
 	remotes        = flag.String("remotes", "", "comma-separated addresses of every replica, in ID order 1..n")
@@ -57,6 +61,74 @@ var (
 	_ = flag.Int("rate-step", 0, "unused")
 	_ = flag.Duration("call-timeout", 0, "unused")
 )
+
+const (
+	protoHotStuff = "hotstuff"
+	protoDiem     = "diem"
+)
+
+// runner is what running and reporting need from a replica. The two replica
+// types expose different block and counter types, so the adapters below flatten
+// both to commit digests and one counter struct rather than making everything
+// downstream generic.
+type runner interface {
+	ID() hotstuff.ID
+	Run(context.Context) error
+	QueueHighWater() int
+	commits() []hotstuff.Hash
+	counters() counters
+}
+
+// counters is the part of a transport snapshot both protocols share, plus the
+// one number that differs: HotStuff can fail a backfill, DiemBFT has no
+// backfill and instead declines to vote when an ancestor is missing.
+type counters struct {
+	dropped  uint64
+	rejected uint64
+	own      string
+}
+
+type hotstuffRunner struct{ *replica.Replica }
+
+func (r hotstuffRunner) commits() []hotstuff.Hash {
+	log := r.Log()
+	out := make([]hotstuff.Hash, len(log))
+	for i, b := range log {
+		out[i] = b.Hash()
+	}
+	return out
+}
+
+func (r hotstuffRunner) counters() counters {
+	c := r.Replica.Counters()
+	return counters{c.OutboundDropped, c.Rejected, fmt.Sprintf("fetch failures %d", c.FetchFailed)}
+}
+
+type diemRunner struct{ *replica.Diem }
+
+// diem.Hash is hotstuff.Hash, so the two commit logs compare directly.
+func (r diemRunner) commits() []hotstuff.Hash {
+	log := r.Log()
+	out := make([]hotstuff.Hash, len(log))
+	for i, b := range log {
+		out[i] = b.ID()
+	}
+	return out
+}
+
+func (r diemRunner) counters() counters {
+	c := r.Diem.Counters()
+	return counters{c.OutboundDropped, c.Rejected, fmt.Sprintf("declined for a missing ancestor %d", r.DeclinedMissingAncestor())}
+}
+
+// newRunner builds whichever replica -protocol selected. Everything else about
+// the two is identical, which is why one Config serves both.
+func newRunner(cfg replica.Config) runner {
+	if *protocol == protoDiem {
+		return diemRunner{replica.NewDiem(cfg)}
+	}
+	return hotstuffRunner{replica.New(cfg)}
+}
 
 func main() {
 	flag.Parse()
@@ -83,6 +155,10 @@ func run() error {
 			return err
 		}
 		defer pprof.StopCPUProfile()
+	}
+
+	if *protocol != protoHotStuff && *protocol != protoDiem {
+		return fmt.Errorf("-protocol %q: want %q or %q", *protocol, protoHotStuff, protoDiem)
 	}
 
 	switch {
@@ -134,18 +210,20 @@ func runLocal(n int) error {
 	}
 	defer stop()
 
-	reps := make([]*replica.Replica, n)
-	meters := make([]*metrics.Metrics, n)
+	reps := make([]runner, n)
+	meters := newMeters(n)
 	for i := range n {
 		id := hotstuff.ID(i + 1)
-		meters[i] = metrics.New(hotstuff.SystemClock{}, 0)
-		reps[i] = replica.New(replica.Config{
+		cfg := replica.Config{
 			ID: id, Key: privs[id], Keys: pubs,
 			Commands:     commands(),
 			ViewDuration: *viewDuration,
 			Server:       srvs[i],
-			Metrics:      meters[i],
-		})
+		}
+		if meters != nil {
+			cfg.Metrics = meters[i]
+		}
+		reps[i] = newRunner(cfg)
 	}
 	return runAll(reps, meters)
 }
@@ -174,27 +252,45 @@ func runOne() error {
 	for i, addr := range addrs {
 		peers[uint32(i+1)] = addr
 	}
-	m := metrics.New(hotstuff.SystemClock{}, 0)
-	return runAll([]*replica.Replica{replica.New(replica.Config{
+	meters := newMeters(1)
+	cfg := replica.Config{
 		ID: id, Peers: peers, Listen: self,
 		Key: priv, Keys: pubs,
 		Commands:     commands(),
 		ViewDuration: *viewDuration,
 		DialOptions:  dialOptions(),
-		Metrics:      m,
-	})}, []*metrics.Metrics{m})
+	}
+	if meters != nil {
+		cfg.Metrics = meters[0]
+	}
+	return runAll([]runner{newRunner(cfg)}, meters)
+}
+
+// newMeters is one metrics collector per replica, or nil under -protocol diem:
+// the metrics decorators wrap hotstuff.Transport and hotstuff.Executor, neither
+// of which the DiemBFT stack has. diem.Config.Observer is the equivalent hook
+// and wiring it up is separate work.
+func newMeters(n int) []*metrics.Metrics {
+	if *protocol == protoDiem {
+		return nil
+	}
+	meters := make([]*metrics.Metrics, n)
+	for i := range meters {
+		meters[i] = metrics.New(hotstuff.SystemClock{}, 0)
+	}
+	return meters
 }
 
 // runAll runs every replica until -time elapses or the process is interrupted,
 // then reports what each committed.
-func runAll(reps []*replica.Replica, meters []*metrics.Metrics) error {
+func runAll(reps []runner, meters []*metrics.Metrics) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	root, stop := context.WithTimeout(root, *runTime)
 	defer stop()
 
 	var wg sync.WaitGroup
-	if *statsMode == "ndjson" {
+	if *statsMode == "ndjson" && meters != nil {
 		w, closeSamples, err := samplesWriter()
 		if err != nil {
 			return err
@@ -240,14 +336,17 @@ func samplesWriter() (io.Writer, func(), error) {
 
 // report prints each replica's committed depth and checks the logs agree over
 // their common prefix, which is the whole point of running the thing.
-func report(reps []*replica.Replica, meters []*metrics.Metrics) error {
+func report(reps []runner, meters []*metrics.Metrics) error {
 	w := os.Stdout
-	logs := make([][]*hotstuff.Block, len(reps))
+	logs := make([][]hotstuff.Hash, len(reps))
 	for i, r := range reps {
-		logs[i] = r.Log()
-		c := r.Counters()
-		fmt.Fprintf(w, "replica %d: committed %d, dropped %d, fetch failures %d, rejected %d, queue high-water %d\n",
-			r.ID(), len(logs[i]), c.OutboundDropped, c.FetchFailed, c.Rejected, r.QueueHighWater())
+		logs[i] = r.commits()
+		c := r.counters()
+		fmt.Fprintf(w, "replica %d: committed %d, dropped %d, %s, rejected %d, queue high-water %d\n",
+			r.ID(), len(logs[i]), c.dropped, c.own, c.rejected, r.QueueHighWater())
+		if meters == nil {
+			continue
+		}
 		if s := meters[i].Snapshot(); s.LatencySamples > 0 {
 			fmt.Fprintf(w, "  commit latency: mean %v over %d samples, max %v\n",
 				time.Duration(s.LatencyTotalNs/s.LatencySamples), s.LatencySamples, time.Duration(s.LatencyMaxNs))
@@ -256,7 +355,7 @@ func report(reps []*replica.Replica, meters []*metrics.Metrics) error {
 	for i := range logs {
 		for j := i + 1; j < len(logs); j++ {
 			for k := range min(len(logs[i]), len(logs[j])) {
-				if logs[i][k].Hash() != logs[j][k].Hash() {
+				if logs[i][k] != logs[j][k] {
 					return fmt.Errorf("replicas %d and %d disagree at commit %d", reps[i].ID(), reps[j].ID(), k)
 				}
 			}

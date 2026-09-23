@@ -1,0 +1,123 @@
+edition = "2024";
+
+package diempb;
+
+option go_package = "github.com/DanyGoT/HotStuffs/proto/diempb";
+option features.field_presence = IMPLICIT;
+option features.enforce_naming_style = STYLE_LEGACY;
+
+import "gorums.proto";
+import "google/protobuf/empty.proto";
+
+// A second file and a second package rather than a second service in
+// hotstuff.proto: Gorums allows one service per .proto file. The two protocols
+// share no message anyway — DiemBFT signs a LedgerCommitInfo where Chained
+// HotStuff signs a (view, block) pair.
+
+// signer is a *claim*: meaningful only once sig verifies against the public key
+// registered for that ID. Gorums exposes no authenticated sender identity, so
+// authentication is by signature, never by connection.
+message Signature {
+  uint32 signer = 1;
+  bytes sig = 2;
+}  // ECDSA P-256, ASN.1 DER
+
+// The parent's id and round travel with the vote so a receiver can decide
+// commitment from one block without walking its ancestry.
+message VoteInfo {
+  bytes id = 1;
+  uint64 round = 2;
+  bytes parent_id = 3;
+  uint64 parent_round = 4;
+  bytes exec_state_id = 5;
+}
+
+message LedgerCommitInfo {
+  bytes commit_state_id = 1;
+  bytes vote_info_hash = 2;
+}
+
+// signatures is ordered by signer and must stay that way: a block id covers the
+// slice byte for byte, so a permuted certificate is a different block.
+// author_sig is absent only on the genesis certificate, which is trusted rather
+// than certified.
+message QuorumCert {
+  VoteInfo vote_info = 1;
+  LedgerCommitInfo ledger_commit_info = 2;
+  repeated Signature signatures = 3;
+  uint32 author = 4;
+  Signature author_sig = 5;
+}
+
+// One slice of pairs, not the paper's two parallel vectors: each signature
+// covers (tc.round, its own high_qc_round), so a misalignment would verify a
+// signer against somebody else's reported round.
+message TimeoutVote {
+  uint64 high_qc_round = 1;
+  Signature sig = 2;
+}
+
+message TimeoutCert {
+  uint64 round = 1;
+  repeated TimeoutVote votes = 2;
+}
+
+// No id field: the receiver recomputes it from the fields, so no digest is ever
+// taken from the wire.
+message Block {
+  uint32 author = 1;
+  uint64 round = 2;
+  repeated bytes payload = 3;
+  QuorumCert qc = 4;
+}
+
+message ProposalMsg {
+  Block block = 1;
+  TimeoutCert last_round_tc = 2;
+  QuorumCert high_commit_qc = 3;
+  uint32 sender = 4;
+  Signature sig = 5;
+}
+
+message VoteMsg {
+  VoteInfo vote_info = 1;
+  LedgerCommitInfo ledger_commit_info = 2;
+  QuorumCert high_commit_qc = 3;
+  uint32 sender = 4;
+  Signature sig = 5;
+}
+
+message TimeoutInfo {
+  uint64 round = 1;
+  QuorumCert high_qc = 2;
+  uint32 sender = 3;
+  Signature sig = 4;
+}
+
+message TimeoutMsg {
+  TimeoutInfo tmo_info = 1;
+  TimeoutCert last_round_tc = 2;
+  QuorumCert high_commit_qc = 3;
+}
+
+// GORUMS: an RPC name must never equal a message name, or the generated client
+// function collides with the generated type — hence ProposalMsg, not Proposal.
+// Only one service is allowed per .proto file, and Config, Node, NodeContext
+// and ConfigContext are reserved message names.
+service Diem {
+  rpc Proposal(ProposalMsg) returns (google.protobuf.Empty) {
+    option (gorums.multicast) = true;
+  }
+
+  // Unicast, unlike the HotStuff service, which broadcasts its votes. DiemBFT
+  // 3.1 sends a vote to the leader of the next round alone, because that leader
+  // is the only replica that will propose over the certificate. Keeping the
+  // paper's mapping here is what makes the two transports comparable.
+  rpc Vote(VoteMsg) returns (google.protobuf.Empty) {
+    option (gorums.unicast) = true;
+  }
+
+  rpc Timeout(TimeoutMsg) returns (google.protobuf.Empty) {
+    option (gorums.multicast) = true;
+  }
+}

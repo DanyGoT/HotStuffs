@@ -1,5 +1,5 @@
-GO_DIRS := hotstuff crypto blockchain consensus diem network simnet replica cmd internal
-PROTO   := proto/hotstuffpb/hotstuff.proto
+GO_DIRS := hotstuff crypto blockchain consensus diem network diemnet simnet replica cmd internal
+PROTO   := proto/hotstuffpb/hotstuff.proto proto/diempb/diem.proto
 BIN     := $(CURDIR)/bin
 PLUGINS := $(BIN)/protoc-gen-go $(BIN)/protoc-gen-gorums
 
