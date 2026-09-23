@@ -3,20 +3,26 @@
 // Gorums, and it runs on a single goroutine, so it holds no locks.
 package consensus
 
-import "github.com/DanyGoT/HotStuffs/hotstuff"
+import (
+	"github.com/DanyGoT/HotStuffs/blockchain"
+	"github.com/DanyGoT/HotStuffs/hotstuff"
+)
 
 // chainLength is how many consecutive certified views a commit needs.
 const chainLength = 3
 
-// chained implements the three decisions that define Chained HotStuff.
-type chained struct {
+// Chained is the protocol variant: the three decisions that differ between
+// HotStuff flavours, in the form that defines Chained HotStuff. Every method
+// is a pure function of the snapshot it is given plus the block store, which
+// is what makes it table-testable.
+type Chained struct {
 	id    hotstuff.ID
-	store hotstuff.BlockStore
+	store *blockchain.Store
 }
 
 // NewRules returns the Chained HotStuff ruleset for replica id.
-func NewRules(id hotstuff.ID, store hotstuff.BlockStore) hotstuff.Rules {
-	return chained{id: id, store: store}
+func NewRules(id hotstuff.ID, store *blockchain.Store) *Chained {
+	return &Chained{id: id, store: store}
 }
 
 // VoteRule is Algorithm 3's safeNode in the form the one-block-per-view lemma
@@ -35,7 +41,7 @@ func NewRules(id hotstuff.ID, store hotstuff.BlockStore) hotstuff.Rules {
 // QuorumCert would resolve the lock too, but that is DiemBFT's design and it
 // changes both the wire format and the vote digest, for nothing this does not
 // already give.
-func (r chained) VoteRule(s hotstuff.State, p hotstuff.Proposal) bool {
+func (r *Chained) VoteRule(s hotstuff.State, p hotstuff.Proposal) bool {
 	if p.Block.View() <= s.LastVotedView || p.Block.QC().View < s.LockedView {
 		return false
 	}
@@ -44,8 +50,8 @@ func (r chained) VoteRule(s hotstuff.State, p hotstuff.Proposal) bool {
 }
 
 // ProposeRule extends the highest QC in the current view. The Proposal comes
-// back unsigned; signing is the caller's job.
-func (r chained) ProposeRule(s hotstuff.State, cmds [][]byte, tc *hotstuff.TimeoutCert) (hotstuff.Proposal, bool) {
+// back unsigned; signing is the caller's job, so the rules stay crypto-free.
+func (r *Chained) ProposeRule(s hotstuff.State, cmds [][]byte, tc *hotstuff.TimeoutCert) (hotstuff.Proposal, bool) {
 	if s.HighQC.View >= s.View {
 		return hotstuff.Proposal{}, false
 	}
@@ -53,15 +59,19 @@ func (r chained) ProposeRule(s hotstuff.State, cmds [][]byte, tc *hotstuff.Timeo
 	return hotstuff.Proposal{Block: b, TC: tc}, true
 }
 
-// CommitRule is the 3-chain rule. Walking back one certificate at a time from b
-// gives chainLength blocks; the last commits when they are parent-linked and
-// their views are consecutive. Requiring consecutive views is what the paper's
+// CommitRule returns the highest block committed as a consequence of b being
+// stored, or nil; if the decision needs an absent ancestor it returns (nil,
+// thatHash), and otherwise missing is the zero Hash.
+//
+// It is the 3-chain rule. Walking back one certificate at a time from b gives
+// chainLength blocks; the last commits when they are parent-linked and their
+// views are consecutive. Requiring consecutive views is what the paper's
 // dummy blocks would otherwise have guaranteed.
 //
 // b's own view plays no part: b carries no certificate for itself, only the
 // third one for the chain below it. So a block proposed across a view-change gap
 // still commits the consecutive history beneath it.
-func (r chained) CommitRule(_ hotstuff.State, b *hotstuff.Block) (*hotstuff.Block, hotstuff.Hash) {
+func (r *Chained) CommitRule(_ hotstuff.State, b *hotstuff.Block) (*hotstuff.Block, hotstuff.Hash) {
 	var c [chainLength]*hotstuff.Block
 	cur := b
 	for i := range c {

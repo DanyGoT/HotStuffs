@@ -1,13 +1,13 @@
-package consensus
+package hotstuff
 
 import (
 	"testing"
 	"time"
 )
 
-func TestExponentialDurationGrowsThenResets(t *testing.T) {
+func TestDurationGrowsThenResets(t *testing.T) {
 	base, max, factor := 10*time.Millisecond, 80*time.Millisecond, 2.0
-	d := NewViewDuration(base, max, factor)
+	d := NewDuration(base, max, factor)
 
 	if got := d.Duration(); got != base {
 		t.Fatalf("Duration() = %v, want base %v", got, base)

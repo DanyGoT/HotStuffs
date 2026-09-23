@@ -18,6 +18,15 @@ type (
 	ID        = hotstuff.ID
 	Hash      = hotstuff.Hash
 	Signature = hotstuff.Signature
+
+	// The round timer has the same shape in both protocols, so one fake clock
+	// serves both harnesses.
+	Clock = hotstuff.Clock
+	Timer = hotstuff.Timer
+
+	// Crypto signs and verifies digests. DiemBFT aggregates nothing, so a
+	// certificate is a slice of signatures and there is no combine step.
+	Crypto = hotstuff.Crypto
 )
 
 // Round is a DiemBFT round. The paper's rounds are HotStuff's views under

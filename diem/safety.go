@@ -9,18 +9,21 @@ package diem
 // arrives as an argument or comes from the ledger.
 type Safety struct {
 	id     ID
-	quorum int
+	verify *Verifier
 	crypto Crypto
-	ledger Ledger
+	ledger *MemLedger
 	tree   *BlockTree
 
 	highestVoteRound Round
 	highestQCRound   Round
+
+	declinedMissingAncestor uint64
 }
 
-// NewSafety returns the safety module for replica id.
-func NewSafety(id ID, quorum int, crypto Crypto, ledger Ledger, tree *BlockTree) *Safety {
-	return &Safety{id: id, quorum: quorum, crypto: crypto, ledger: ledger, tree: tree}
+// NewSafety returns the safety module for replica id. It re-verifies through
+// verify rather than trusting what the edge already checked.
+func NewSafety(id ID, verify *Verifier, crypto Crypto, ledger *MemLedger, tree *BlockTree) *Safety {
+	return &Safety{id: id, verify: verify, crypto: crypto, ledger: ledger, tree: tree}
 }
 
 // HighestVoteRound is the last round this replica voted or timed out in.
@@ -29,6 +32,11 @@ func (s *Safety) HighestVoteRound() Round { return s.highestVoteRound }
 // HighestQCRound is the highest certified round this replica has endorsed by
 // voting over it.
 func (s *Safety) HighestQCRound() Round { return s.highestQCRound }
+
+// DeclinedMissingAncestor counts the votes withheld because the block's
+// ancestry was never speculated. It is monotonic, and it is the only measure of
+// what having no block-sync costs: see MemLedger.Speculate.
+func (s *Safety) DeclinedMissingAncestor() uint64 { return s.declinedMissingAncestor }
 
 func (s *Safety) increaseHighestVoteRound(round Round) {
 	s.highestVoteRound = max(round, s.highestVoteRound)
@@ -111,6 +119,7 @@ func (s *Safety) MakeVote(b *Block, lastTC *TC) *VoteMsg {
 	// block-sync — has no result to claim.
 	exec, ok := s.ledger.PendingState(b.ID())
 	if !ok {
+		s.declinedMissingAncestor++
 		return nil
 	}
 
@@ -161,44 +170,5 @@ func (s *Safety) MakeTimeout(round Round, highQC *QC, lastTC *TC) *TimeoutInfo {
 // the replica has checked it already; Safety checks again because it is the
 // one component assumed to survive the rest being compromised.
 func (s *Safety) validSignatures(qc *QC, tc *TC) bool {
-	return s.ValidQC(qc) && s.ValidTC(tc)
-}
-
-// ValidQC reports whether qc carries a quorum over the ledger commit info it
-// claims, and whether that info binds the VoteInfo it ships with. Without the
-// second check a forwarder could swap in a different VoteInfo behind an
-// otherwise valid quorum.
-func (s *Safety) ValidQC(qc *QC) bool {
-	if qc == nil {
-		return false
-	}
-	if qc.Round() == 0 {
-		// Genesis is trusted, not certified: every replica hardcodes it.
-		return qc.VoteInfo.ID == genesisBlock.ID()
-	}
-	if VoteInfoHash(qc.VoteInfo) != qc.LedgerCommitInfo.VoteInfoHash {
-		return false
-	}
-	return s.crypto.VerifyQuorum(LedgerCommitDigest(qc.LedgerCommitInfo), qc.Signatures)
-}
-
-// ValidTC reports whether tc carries a quorum of distinct signers, each having
-// signed tc's round paired with its own reported high_qc round. A nil TC is
-// valid: whether one was required is a well-formedness question, decided
-// before a message reaches here.
-func (s *Safety) ValidTC(tc *TC) bool {
-	if tc == nil {
-		return true
-	}
-	seen := make(map[ID]struct{}, len(tc.Votes))
-	for _, v := range tc.Votes {
-		if _, dup := seen[v.Sig.Signer]; dup {
-			return false
-		}
-		if !s.crypto.Verify(TimeoutDigest(tc.Round, v.HighQCRound), v.Sig) {
-			return false
-		}
-		seen[v.Sig.Signer] = struct{}{}
-	}
-	return len(seen) >= s.quorum
+	return s.verify.VerifyQC(qc) && s.verify.VerifyTC(tc)
 }

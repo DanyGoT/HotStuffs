@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/DanyGoT/HotStuffs/blockchain"
 	"github.com/DanyGoT/HotStuffs/hotstuff"
 )
 
@@ -12,13 +13,13 @@ import (
 type Config struct {
 	ID        hotstuff.ID
 	N         int
-	Rules     hotstuff.Rules
-	Store     hotstuff.BlockStore
+	Rules     *Chained
+	Store     *blockchain.Store
 	Crypto    hotstuff.Crypto
 	Transport hotstuff.Transport
 	Leader    hotstuff.LeaderRotation
 	Clock     hotstuff.Clock
-	Duration  hotstuff.ViewDuration
+	Duration  *hotstuff.Duration
 	Commands  hotstuff.CommandQueue
 	Executor  hotstuff.Executor
 	Sink      hotstuff.EventSink
@@ -74,13 +75,13 @@ type Core struct {
 	id     hotstuff.ID
 	quorum int
 
-	rules   hotstuff.Rules
-	store   hotstuff.BlockStore
+	rules   *Chained
+	store   *blockchain.Store
 	crypto  hotstuff.Crypto
 	net     hotstuff.Transport
 	leader  hotstuff.LeaderRotation
 	clock   hotstuff.Clock
-	dur     hotstuff.ViewDuration
+	dur     *hotstuff.Duration
 	cmds    hotstuff.CommandQueue
 	exec    hotstuff.Executor
 	sink    hotstuff.EventSink
