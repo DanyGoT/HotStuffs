@@ -13,6 +13,101 @@ https://www.overleaf.com/learn/latex/TikZ_package
 
 
 
+* Overview
+
+Two Byzantine fault-tolerant consensus protocols in Go, built from the papers
+rather than ported from an existing implementation, talking over [[4][Gorums]].
+
+A group of =n= replicas agrees on an ever-growing log of commands, and keeps
+agreeing while up to =f= of them are crashed, slow, or actively lying, where
+=n = 3f + 1=. Four replicas tolerate one liar.
+
+** The two protocols
+
+| package      | protocol         | commits on          | status                |
+|--------------+------------------+---------------------+-----------------------|
+| =diem/=      | DiemBFT v4       | a contiguous 2-chain | the live one         |
+| =consensus/= | Chained HotStuff | a 3-chain            | kept as the baseline |
+
+=diem/= follows the DiemBFT v4 pseudocode (paper §3), one file per module of
+the paper. It is where new work goes. =consensus/= came first and stays put, so
+the report has something to compare against; it is not being extended.
+
+** What a replica does, in a loop
+
+#+begin_example
+  the leader of this round bundles commands into a block and broadcasts it
+      |
+  everyone checks the block and votes for it, if their safety rules allow
+      |
+  the next leader collects a quorum of votes into a certificate (a QC)
+      |
+  a QC over two rounds in a row means the older block can never be undone
+      |
+  -> commit it, and the round advances
+#+end_example
+
+If a round produces no block — a crashed or silent leader — replicas time out,
+and a quorum of timeouts forms a *timeout certificate* that lets the next
+leader carry on without the missing round.
+
+** How a message travels
+
+The path from the network to the protocol and back is deliberately short:
+
+#+begin_example
+  gRPC/Gorums -> decode -> VERIFY -> queue -> Core.Step -> Transport -> out
+                            |                    |
+                  every signature checked   pure state machine:
+                  here, on the handler      one goroutine, no locks,
+                  goroutine. Anything       no crypto, no wire types
+                  that fails is dropped
+                  and never reaches Core.
+#+end_example
+
+The rule is *authenticate at the edge, authorise by state in the loop*. By the
+time a message reaches =Core=, it is known to be genuinely signed; =Core= only
+decides whether it is welcome given what the replica currently believes.
+
+Interfaces exist only where there is genuinely more than one implementation.
+=diem/= declares exactly one (=Transport=, which has a real one and a test one).
+Everything else is a concrete type, because an interface with a single
+implementation is a hop to step through while reading, and buys nothing.
+
+** Running it
+
+Four replicas in one process for ten seconds:
+
+#+begin_src sh
+go run ./cmd/hotstuff -protocol diem -local 4 -time 10s -payload 32 -workers 4
+#+end_src
+
+Four separate processes over TCP — the same code path, one per terminal, after
+writing a key pair per replica:
+
+#+begin_src sh
+go run ./cmd/hotstuff -gen-keys -keys ./keys \
+  -remotes 127.0.0.1:20001,127.0.0.1:20002,127.0.0.1:20003,127.0.0.1:20004
+
+go run ./cmd/hotstuff -protocol diem -self 127.0.0.1:20001 \
+  -remotes 127.0.0.1:20001,127.0.0.1:20002,127.0.0.1:20003,127.0.0.1:20004 \
+  -keys ./keys -time 15s
+#+end_src
+
+Each replica prints how many blocks it committed; the =-local= runs also check
+that every replica's log agrees over the prefix they share.
+
+=make test= runs everything, =make race= under the race detector, and
+=make check-deps= enforces the layering rules described below. =make proto=
+regenerates the protobuf and needs =nix develop= for =protoc=.
+
+** Where to look first
+
+- =diem/core.go= — the event loop; the whole protocol surface is one =switch=
+- =diem/safety.go= — the rules that decide whether voting is safe
+- =diem/verify.go= — everything checked before a message is let in
+- =.claude/notes/diembft-pseudocode.md= — the paper's pseudocode, transcribed
+
 * Codebase Map
 
 Layering runs leaf to root: =hotstuff= depends on nothing but the standard
