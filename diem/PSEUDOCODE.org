@@ -34,9 +34,9 @@ deterministic harness, =Loop.Run= in production.
 One switch over the sealed =Event= set, so the dispatch is exhaustive by
 construction and needs no default case.
 
-- Implemented :: =core.go:153= =Core.Step=; the event set is =events.go:7=
+- Implemented :: =core.go:151= =Core.Step=; the event set is =events.go:7=
   =Event= with its four members.
-- Differs :: the paper dispatches a local timeout unconditionally. =core.go:173=
+- Differs :: the paper dispatches a local timeout unconditionally. =core.go:171=
   runs =Pacemaker.LocalTimeoutRound= only when the event's =Round= is still
   =Pacemaker.CurrentRound()=. The timer callback runs off the consensus
   goroutine and only enqueues, so a callback that had already fired when
@@ -48,8 +48,8 @@ construction and needs no default case.
 Feed the certificate to the block tree, then to leader election, then to the
 pacemaker.
 
-- Implemented :: =core.go:182= =Core.processCertificateQC=.
-- Differs :: only in two details. A nil guard at =core.go:183=, because
+- Implemented :: =core.go:180= =Core.processCertificateQC=.
+- Differs :: only in two details. A nil guard at =core.go:181=, because
   =HighCommitQC= is optional on the wire. And the paper's
   =Pacemaker.advance_round(qc.vote_info.round)= is =AdvanceRoundQC(qc)= here —
   see *Where the paper is self-contradictory*, item 1. The order is the
@@ -62,13 +62,13 @@ Advance on all three certificates the proposal carries, then check that the
 block's round is the current round and that its sender and author both lead it,
 then speculate and insert, then vote.
 
-- Implemented :: =core.go:194= =Core.processProposalMsg=; the vote goes out at
-  =core.go:215= to =LeaderElection.GetLeader(round+1)=, unicast, as the paper
+- Implemented :: =core.go:192= =Core.processProposalMsg=; the vote goes out at
+  =core.go:213= to =LeaderElection.GetLeader(round+1)=, unicast, as the paper
   specifies.
 - Differs :: no protocol difference. What changed is *where* authentication
   happens: signatures, quorum sizes, certificate well-formedness and signer
   order are checked at the edge (=diemnet/server.go:36=, =Verifier.VerifyProposal=
-  at =verify.go:95=) before the message is queued. The three checks that remain
+  at =verify.go:94=) before the message is queued. The three checks that remain
   here are the paper's own, and the leader check could not move anyway —
   =GetLeader= has a reputation path keyed on committed blocks, so a round's
   leader is a function of protocol state.
@@ -79,7 +79,7 @@ Advance on the timeout's =HighQC=, its =HighCommitQC= and its =LastRoundTC=,
 then accumulate it; a TC that completes advances the round and fires a new-round
 event.
 
-- Implemented :: =core.go:218= =Core.processTimeoutMsg=.
+- Implemented :: =core.go:216= =Core.processTimeoutMsg=.
 - Faithful :: no deviation.
 
 ** process_vote_msg(M)
@@ -87,9 +87,9 @@ event.
 Accumulate the vote; a certificate that completes is processed and a new-round
 event fires.
 
-- Implemented :: =core.go:231= =Core.processVoteMsg=.
-- Differs :: a round-lead bound precedes the paper's body. =core.go:232=
-  drops a vote claiming a round more than =maxRoundLead= (=core.go:125=, 4)
+- Implemented :: =core.go:229= =Core.processVoteMsg=.
+- Differs :: a round-lead bound precedes the paper's body. =core.go:230=
+  drops a vote claiming a round more than =maxRoundLead= (=core.go:123=, 4)
   above the current one. The paper has no bound. Votes bucket on a digest over
   a =LedgerCommitInfo= its sender picks freely, and nothing a receiver can check
   binds the round a vote claims, so without the bound one sender opens one
@@ -101,12 +101,12 @@ event fires.
 If this replica leads the round it just entered, build a block over =HighQC=,
 sign its id and broadcast the proposal.
 
-- Implemented :: =core.go:247= =Core.processNewRoundEvent=. The payload comes
-  from =Config.Transactions= (=core.go:47=), nil-checked at =core.go:253=,
-  which is this package's MemPool seam. =core.go:257= is the only =crypto=
+- Implemented :: =core.go:245= =Core.processNewRoundEvent=. The payload comes
+  from =Config.Transactions= (=core.go:45=), nil-checked at =core.go:251=,
+  which is this package's MemPool seam. =core.go:255= is the only =crypto=
   call in =core.go=.
-- Differs :: the paper forwards =last_tc= verbatim. =core.go:263= passes it
-  through =justifyingTC= (=core.go:273=), which returns nil when the block's own
+- Differs :: the paper forwards =last_tc= verbatim. =core.go:261= passes it
+  through =justifyingTC= (=core.go:271=), which returns nil when the block's own
   QC is already from round-1. Forwarding it would produce a proposal that the
   paper's own well-formedness rule makes ill-formed, and that every honest
   replica — including one running the paper's =process_proposal_msg= —
@@ -120,7 +120,7 @@ Execute a block's payload over its parent's speculated state and store the
 result under the block id.
 
 - Implemented :: =ledger.go:75= =MemLedger.Speculate=; the VM is the
-  =Execute= field (=ledger.go:14=), defaulting to =ExecuteHash= (=hash.go:116=).
+  =Execute= field (=ledger.go:14=), defaulting to =ExecuteHash= (=hash.go:114=).
 - Differs :: two things. The signature takes the whole =*Block= rather than the
   paper's three fields — all three are fields of the block, and
   =committed_block= must hand a whole block back, so the ledger holds it
@@ -169,25 +169,25 @@ The paper defines the message types here as well as the module. Those first.
 
 ** The data types
 
-- =VoteInfo= :: =types.go:42=.
-- =LedgerCommitInfo= :: =types.go:57=; the paper's bottom =commit_state_id= is
-  the zero hash, tested by =types.go:63= =LedgerCommitInfo.Commits=.
-- =VoteMsg= :: =types.go:68=.
-- =QC= :: =types.go:77=, with =types.go:90= =QC.Round= and =types.go:99=
+- =VoteInfo= :: =types.go:28=.
+- =LedgerCommitInfo= :: =types.go:43=; the paper's bottom =commit_state_id= is
+  the zero hash, tested by =types.go:49= =LedgerCommitInfo.Commits=.
+- =VoteMsg= :: =types.go:54=.
+- =QC= :: =types.go:63=, with =types.go:76= =QC.Round= and =types.go:85=
   =higher=, which is the paper's =max_round{}=.
-- =Block= :: =types.go:108=, built by =types.go:118= =NewBlock=; the id
+- =Block= :: =types.go:94=, built by =types.go:104= =NewBlock=; the id
   formula =hash(author || round || payload || qc.vote_info.id || qc.signatures)=
-  is =hash.go:55= =blockID=.
-- =TimeoutInfo= :: =types.go:133=.
-- =TC= :: =types.go:154=, plus =types.go:162= =TC.MaxHighQCRound=, the paper's
+  is =hash.go:53= =blockID=.
+- =TimeoutInfo= :: =types.go:119=.
+- =TC= :: =types.go:140=, plus =types.go:148= =TC.MaxHighQCRound=, the paper's
   =max(tc.tmo_high_qc_rounds)=.
-- =TimeoutMsg= :: =types.go:177=. =ProposalMsg= :: =types.go:185=.
+- =TimeoutMsg= :: =types.go:163=. =ProposalMsg= :: =types.go:171=.
 - Well-formedness :: the paper states it as prose, not pseudocode; it is
-  =types.go:208= =wellFormed= with the two entry points =types.go:197=
-  =ProposalMsg.WellFormed= and =types.go:203= =TimeoutMsg.WellFormed=.
+  =types.go:194= =wellFormed= with the two entry points =types.go:183=
+  =ProposalMsg.WellFormed= and =types.go:189= =TimeoutMsg.WellFormed=.
 
 One deviation in the types: the paper keeps a TC's =tmo_high_qc_rounds= and
-=tmo_signatures= in two parallel vectors. =types.go:147= =TimeoutVote= is one
+=tmo_signatures= in two parallel vectors. =types.go:133= =TimeoutVote= is one
 slice of pairs instead. Each signature covers =(tc.Round, its own HighQCRound)=,
 so verifying against the wrong partner would silently succeed for a different
 sender, and parallel vectors are exactly the shape that permits that.
@@ -217,8 +217,8 @@ Process the vote's commit certificate, bucket the vote by the digest of its
 =LedgerCommitInfo=, and return a QC once a bucket reaches quorum.
 
 - Implemented :: =blocktree.go:105= =BlockTree.ProcessVote=; the author
-  signature is produced at =blocktree.go:129= over =hash.go:105= =qcSigsDigest=,
-  and checked on receipt at =verify.go:50= inside =Verifier.VerifyQC=.
+  signature is produced at =blocktree.go:129= over =hash.go:103= =qcSigsDigest=,
+  and checked on receipt at =verify.go:49= inside =Verifier.VerifyQC=.
 - Differs :: three things.
   1. The paper accumulates a *set union over signatures*. With a randomised
      signature scheme two signatures by one replica differ byte for byte, so
@@ -240,7 +240,7 @@ Process the vote's commit certificate, bucket the vote by the digest of its
 A block for the current round over the highest certificate known.
 
 - Implemented :: =blocktree.go:146= =BlockTree.GenerateBlock=, over
-  =types.go:118= =NewBlock= and =hash.go:55= =blockID=.
+  =types.go:104= =NewBlock= and =hash.go:53= =blockID=.
 - Faithful :: no deviation.
 
 * 3.4 Safety
@@ -273,7 +273,7 @@ A block may skip rounds only behind a TC for the round directly below it, and
 only when its certificate is at least as high as every certificate that TC's
 quorum reported.
 
-- Implemented :: =safety.go:56= =Safety.safeToExtend=, over =types.go:162=
+- Implemented :: =safety.go:56= =Safety.safeToExtend=, over =types.go:148=
   =TC.MaxHighQCRound=.
 - Differs :: a nil guard at =safety.go:57=. The paper dereferences =tc.round=
   and =tc.tmo_high_qc_rounds= with no guard, while =safe_to_vote= calls it with
@@ -328,7 +328,7 @@ Re-verify, apply =safe_to_timeout=, raise =highest_vote_round= to stop voting
 in the round, and sign =(round, high_qc.round)=.
 
 - Implemented :: =safety.go:156= =Safety.MakeTimeout=; the digest is
-  =hash.go:96= =TimeoutDigest=.
+  =hash.go:94= =TimeoutDigest=.
 - Faithful :: no deviation.
 
 ** valid_signatures(b, last_tc)
@@ -336,7 +336,7 @@ in the round, and sign =(round, high_qc.round)=.
 The paper calls this from both public procedures but never defines it.
 
 - Implemented :: =safety.go:172= =Safety.validSignatures=, which routes to
-  =verify.go:29= =Verifier.VerifyQC= and =verify.go:73= =Verifier.VerifyTC= —
+  =verify.go:28= =Verifier.VerifyQC= and =verify.go:72= =Verifier.VerifyTC= —
   the same implementations the edge uses. Safety re-verifies deliberately: it
   holds the private key and is the one module assumed to survive the rest being
   compromised.
@@ -348,10 +348,9 @@ The paper calls this from both public procedures but never defines it.
 The paper leaves the formula open — "4*delta, or alpha + beta*commit_gap(r) if
 delta is unknown".
 
-- Implemented :: delegated to the exponential backoff both protocols in this
-  repository share: =hotstuff/duration.go:8= =hotstuff.Duration=, read at
-  =pacemaker.go:83= and fed by =pacemaker.go:81= =ViewStarted=,
-  =pacemaker.go:93= =ViewTimedOut= and =pacemaker.go:180= =ViewSucceeded=.
+- Implemented :: delegated to an exponential backoff, =pacemaker.go:185=
+  =Backoff=, read at =pacemaker.go:80= and fed by =pacemaker.go:90= =Grow=
+  and =pacemaker.go:177= =Reset=.
 - Differs :: a choice within the paper's latitude rather than a deviation.
   There is no =Pacemaker= method of this name; the policy is a field.
 
@@ -359,15 +358,15 @@ delta is unknown".
 
 Stop the running timer, enter the new round, arm a timer for it.
 
-- Implemented :: =pacemaker.go:73= =Pacemaker.startTimer=.
+- Implemented :: =pacemaker.go:71= =Pacemaker.startTimer=.
 - Differs :: it also prunes =pendingTimeouts= below the new round
-  (=pacemaker.go:76-80=). The paper's comment says only the current round's
+  (=pacemaker.go:74-78=). The paper's comment says only the current round's
   timeouts are needed but never drops the others. The timer callback may only
-  enqueue (=pacemaker.go:84=), since it runs off the consensus goroutine.
+  enqueue (=pacemaker.go:80=), since it runs off the consensus goroutine.
 
 ** stop_timer(current_round)
 
-- Implemented :: =pacemaker.go:62= =Pacemaker.Stop=.
+- Implemented :: =pacemaker.go:61= =Pacemaker.Stop=.
 - Differs :: no round argument. There is exactly one timer, so there is nothing
   to select.
 
@@ -375,15 +374,15 @@ Stop the running timer, enter the new round, arm a timer for it.
 
 Build this replica's timeout for the current round and broadcast it.
 
-- Implemented :: =pacemaker.go:92= =Pacemaker.LocalTimeoutRound=.
+- Implemented :: =pacemaker.go:89= =Pacemaker.LocalTimeoutRound=.
 - Differs :: four things.
   1. =save_consensus_state()= is absent — see *Procedures with no counterpart*.
-  2. =pacemaker.go:95= returns when =MakeTimeout= declines. The paper
+  2. =pacemaker.go:92= returns when =MakeTimeout= declines. The paper
      broadcasts a =TimeoutMsg= built around the result unconditionally.
-  3. =pacemaker.go:106= passes =lastRoundTC= through =justifyingTC=, for the
+  3. =pacemaker.go:103= passes =lastRoundTC= through =justifyingTC=, for the
      same reason and by the same rule as the proposal path. See *Where the
      paper is self-contradictory*, item 3.
-  4. =pacemaker.go:112= re-arms the timer. The paper stops it and waits for a
+  4. =pacemaker.go:109= re-arms the timer. The paper stops it and waits for a
      TC, which leaves a replica whose broadcast was lost with no timer at all;
      here the timeout is retransmitted until a QC or a TC moves the round.
 
@@ -392,30 +391,30 @@ Build this replica's timeout for the current round and broadcast it.
 Accumulate a timeout for a round not already behind us; at f+1 senders time out
 locally as well (Bracha amplification), at 2f+1 return the TC.
 
-- Implemented :: =pacemaker.go:122= =Pacemaker.ProcessRemoteTimeout=; the
-  thresholds are =pacemaker.go:144= and =pacemaker.go:147=.
+- Implemented :: =pacemaker.go:119= =Pacemaker.ProcessRemoteTimeout=; the
+  thresholds are =pacemaker.go:141= and =pacemaker.go:144=.
 - Differs :: two things.
-  1. =pacemaker.go:132= returns early on a duplicate sender. The paper puts its
+  1. =pacemaker.go:129= returns early on a duplicate sender. The paper puts its
      two count tests *outside* the duplicate guard, and re-adding a sender to a
      set does not change its size, so a resent timeout re-runs both: a second
      Bracha broadcast, and a second TC for a round already abandoned, which then
      drives an ill-formed proposal. This implementation retransmits timeouts
      while a round is stuck, so the duplicate is certain, not hypothetical.
-  2. =pacemaker.go:156= sorts the assembled TC's votes into signer order.
+  2. =pacemaker.go:153= sorts the assembled TC's votes into signer order.
      Timeouts arrive in whatever order the network delivers them, and a receiver
-     rejects a non-canonical certificate (=verify.go:82=), so a replica whose
+     rejects a non-canonical certificate (=verify.go:81=), so a replica whose
      timeouts arrived out of ID order would otherwise assemble a TC that neither
      its peers nor its own =Safety.validSignatures= would accept.
 
 ** advance_round_tc(tc)
 
-- Implemented :: =pacemaker.go:164= =Pacemaker.AdvanceRoundTC=.
+- Implemented :: =pacemaker.go:161= =Pacemaker.AdvanceRoundTC=.
 - Faithful :: no deviation.
 
 ** advance_round_qc(qc)
 
-- Implemented :: =pacemaker.go:176= =Pacemaker.AdvanceRoundQC=.
-- Faithful :: no deviation. The =ViewSucceeded= call at =pacemaker.go:180= is
+- Implemented :: =pacemaker.go:173= =Pacemaker.AdvanceRoundQC=.
+- Faithful :: no deviation. The =Reset= call at =pacemaker.go:177= is
   =get_round_timer='s business, not the round logic's.
 
 * 3.6 MemPool
@@ -426,8 +425,8 @@ The only procedure the paper declares in this module, with no body.
 
 - Implemented :: =mempool.go:33= =FIFOPool.GetTransactions=, a bounded FIFO
   handing out at most =batch= per call. =Core= reaches it through the
-  =Config.Transactions= function (=core.go:47=), called at =core.go:254=; the
-  production wiring is =replica/diem.go:110= =transactions=.
+  =Config.Transactions= function (=core.go:45=), called at =core.go:252=; in
+  production it is =replica/payload.go:30= =Payload.Transactions=.
 - Differs :: nothing the paper constrains. =mempool.go:21= =FIFOPool.Add= is
   the ingress the paper does not define; an empty result is normal and still
   produces a block, since the pipeline is what commits the blocks below it.
@@ -487,44 +486,44 @@ round.
 - =save_consensus_state()= (3.5, called from =local_timeout_round=) :: the two
   counters it would persist are =Safety='s (=safety.go:17-18=), and this is a
   prototype with no durable state, so persisting them would have nothing to
-  recover into. Recorded at the site, =pacemaker.go:90-91=. A replica that
+  recover into. Recorded at the site, =pacemaker.go:87-88=. A replica that
   restarts here restarts from genesis; the paper's version could restart from
   its last vote.
 
 Two more are implemented but not as procedures, noted so nobody hunts for them:
-=get_round_timer= is a policy field rather than a method (=pacemaker.go:19=),
-and =stop_timer= drops its round argument (=pacemaker.go:62=).
+=get_round_timer= is a policy field rather than a method (=pacemaker.go:18=),
+and =stop_timer= drops its round argument (=pacemaker.go:61=).
 
 * Code with no counterpart in the paper
 
 Section 3 is a protocol, not a program. These are what it takes to run one.
 
-- Bootstrap :: =core.go:130= =Core.Start= — advance on the genesis certificate
+- Bootstrap :: =core.go:128= =Core.Start= — advance on the genesis certificate
   and fire the first new-round event. The paper never says how round 1 begins.
   The genesis block and its certificate are =genesis.go:11=: two objects, not
   one, because a block's id covers a QC but no certificate can name the genesis
   block before its id exists.
-- The edge verifier :: =verify.go:13= =Verifier=, called from
+- The edge verifier :: =verify.go:12= =Verifier=, called from
   =diemnet/server.go:36=, =:45= and =:54=. The paper's only verification hook is
   =valid_signatures= inside =Safety=. Splitting it out is what lets signature
   checking run on the handler goroutines, in parallel across senders. Two of
-  its checks have no paper counterpart at all: =verify.go:102= rejects a block
+  its checks have no paper counterpart at all: =verify.go:101= rejects a block
   whose QC is not from a round below its own (well-formedness permits it on the
   TC branch, and =safeToVote= catches it only after the pacemaker has advanced
-  and the block has been speculated), and =verify.go:78= rejects a TC for round
+  and the block has been speculated), and =verify.go:77= rejects a TC for round
   0, which no replica ever times out of.
 - Canonical certificate encoding :: =blocktree.go:192= =canonical=,
-  =pacemaker.go:156=, and the strict-increase checks at =verify.go:61-65= and
-  =verify.go:82=. A block id covers its parent certificate's signature slice
-  byte for byte (=hash.go:55=), so one quorum left unordered is one quorum's
+  =pacemaker.go:153=, and the strict-increase checks at =verify.go:60-64= and
+  =verify.go:81=. A block id covers its parent certificate's signature slice
+  byte for byte (=hash.go:53=), so one quorum left unordered is one quorum's
   worth of distinct, individually valid block ids, each entering the block tree
   and the speculation tree.
-- The round-lead bound :: =core.go:125= =maxRoundLead=, applied at
-  =core.go:232=. Nothing in the paper bounds how far ahead an inbound vote may
+- The round-lead bound :: =core.go:123= =maxRoundLead=, applied at
+  =core.go:230=. Nothing in the paper bounds how far ahead an inbound vote may
   claim to be.
 - The missing-ancestor counter :: =safety.go:20= and =safety.go:39=
   =Safety.DeclinedMissingAncestor=, incremented at =safety.go:122= and surfaced
-  through =core.go:72= =State.DeclinedMissingAncestor=. Section 3 has no
+  through =core.go:70= =State.DeclinedMissingAncestor=. Section 3 has no
   block-sync and none was added; this counter is the price tag. It is the
   number the report should quote about the gap, rather than an argument about
   whether section 3 is livelocked in principle.
@@ -535,13 +534,13 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
 - The event queue and driver :: =events.go:30= =Queue=, =loop.go:11= =Loop=.
   The goroutine boundary, the only backpressure point, and the queue high-water
   mark.
-- The outbound seam :: =transport.go:7= =Transport=, the only interface the
-  package declares. The paper writes "send" and "broadcast".
+- The seams :: =seams.go:9= =Transport=, where the paper writes "send" and
+  "broadcast", plus =Crypto= and =Clock=, which the paper assumes.
 - Domain-separated digests :: =hash.go:12=. The paper writes =hash()=. Six
   distinct tags keep a vote signature from ever verifying as a timeout
   signature, or either as a block id.
-- Observability :: =core.go:62= =State=, =core.go:139= =Core.State=, and the
-  =Observer= hook at =core.go:58=.
+- Observability :: =core.go:60= =State=, =core.go:137= =Core.State=, and the
+  =Observer= hook at =core.go:56=.
 - MemPool ingress :: =mempool.go:21= =FIFOPool.Add=.
 
 * Where the paper is self-contradictory
@@ -556,7 +555,7 @@ section 3 itself rejects.
 and =process_timeout_msg= calls =Pacemaker.advance_round(tc)= — one with a
 round, one with a certificate. The Pacemaker module (3.5) defines neither; it
 defines =advance_round_qc(qc)= and =advance_round_tc(tc)=. Read as the typed
-pair, which is what =core.go:188= and =core.go:221= implement. Harmless, but it
+pair, which is what =core.go:186= and =core.go:219= implement. Harmless, but it
 is the reason a reader comparing the two modules side by side finds no match.
 
 ** 2. process_new_round_event forwards a TC its own rule forbids
@@ -566,7 +565,7 @@ brought the replica into the round. Its own well-formedness rule says a round-r
 message carries the TC of r-1 *exactly when* its certificate is not from r-1.
 When the new leader's block extends a QC from r-1 — the happy path — the TC is
 forbidden, and a proposal carrying it is discarded by every honest replica,
-including one running the paper's own =process_proposal_msg=. =core.go:273=
+including one running the paper's own =process_proposal_msg=. =core.go:271=
 =justifyingTC= drops it.
 
 ** 3. local_timeout_round broadcasts a TC its own rule forbids
@@ -578,7 +577,7 @@ state is reachable, because =advance_round_qc= can return false — leaving
 =last_round_tc= set — while =process_qc= has already raised =high_qc=. Every
 honest peer then discarded the message, losing that sender's contribution to
 the TC *including its f+1 amplification*. Found by a four-replica cluster run
-reporting rejected messages; after =pacemaker.go:106= applied the same
+reporting rejected messages; after =pacemaker.go:103= applied the same
 =justifyingTC=, every run reports zero rejected.
 
 * Smaller looseness, not previously recorded
@@ -592,16 +591,16 @@ the protocol; all of it is the kind of thing that costs a reader time.
   =commit_state_id_candidate= reads =qc.id=, and =process_vote= constructs a QC
   from =state_id= and =votes=. All four should be paths through =vote_info= or
   the declared names; the implementation reads them that way
-  (=blocktree.go:95= via =types.go:128= =Block.ParentID=, =safety.go:101=,
+  (=blocktree.go:95= via =types.go:114= =Block.ParentID=, =safety.go:101=,
   =blocktree.go:134-140=).
 - Several procedures dereference a possibly-nil argument. =safe_to_extend= and
   =safe_to_timeout= read =tc.round= where the caller may pass nil;
   =process_certificate_qc= is called with =P.high_commit_qc=, which the message
   types allow to be absent; =advance_round_qc= reads =qc.vote_info.round=
-  unguarded. Guarded at =safety.go:57=, =safety.go:90=, =core.go:183= and
-  =types.go:90= respectively.
+  unguarded. Guarded at =safety.go:57=, =safety.go:90=, =core.go:181= and
+  =types.go:76= respectively.
 - =local_timeout_round= does not test =make_timeout='s result before building a
   message around it, although the procedure is declared as returning nil on
-  refusal. Guarded at =pacemaker.go:95=.
+  refusal. Guarded at =pacemaker.go:92=.
 - =reputation_leaders= is written to and never read down or pruned, so it grows
   for the lifetime of the replica. Pruned at =leader.go:78-82=.
