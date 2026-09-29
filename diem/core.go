@@ -2,8 +2,6 @@ package diem
 
 import (
 	"time"
-
-	"github.com/DanyGoT/HotStuffs/hotstuff"
 )
 
 // Core is the paper's Main module (3.1): the event loop that dispatches
@@ -35,7 +33,7 @@ type Config struct {
 	Crypto     Crypto
 	Transport  Transport
 	Clock      Clock
-	Duration   *hotstuff.Duration
+	Backoff    *Backoff
 
 	// Sink accepts events from any goroutine. Only the round timer uses it:
 	// its callback runs off the consensus goroutine, so it may enqueue and
@@ -77,8 +75,8 @@ type State struct {
 // both, and LeaderElection on the Pacemaker's round.
 func New(cfg Config) *Core {
 	n := len(cfg.Validators)
-	quorum := hotstuff.QuorumSize(n)
-	faulty := hotstuff.Faulty(n)
+	quorum := QuorumSize(n)
+	faulty := Faulty(n)
 
 	window, exclude := cfg.WindowSize, cfg.ExcludeSize
 	if window == 0 {
@@ -90,7 +88,7 @@ func New(cfg Config) *Core {
 
 	tree := NewBlockTree(cfg.ID, quorum, cfg.Ledger, cfg.Crypto)
 	safety := NewSafety(cfg.ID, NewVerifier(cfg.Crypto, quorum), cfg.Crypto, cfg.Ledger, tree)
-	pacemaker := NewPacemaker(quorum, faulty, cfg.Clock, cfg.Duration, cfg.Sink, cfg.Transport, safety, tree)
+	pacemaker := NewPacemaker(quorum, faulty, cfg.Clock, cfg.Backoff, cfg.Sink, cfg.Transport, safety, tree)
 	leaders := NewLeaderElection(cfg.Validators, window, exclude, cfg.Ledger, pacemaker)
 
 	return &Core{

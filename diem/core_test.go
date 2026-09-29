@@ -3,10 +3,6 @@ package diem
 import (
 	"testing"
 	"time"
-
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
-	"github.com/DanyGoT/HotStuffs/hotstuff"
-	"github.com/DanyGoT/HotStuffs/internal/fake"
 )
 
 // The tests here cover what Core decides from protocol state — which round it
@@ -31,10 +27,10 @@ func newCoreFixture(t *testing.T) *coreFixture {
 		Validators:   ids,
 		Ledger:       NewMemLedger(),
 		Transactions: NewFIFOPool(16, 2).GetTransactions,
-		Crypto:       nocrypto.New(2, testN),
+		Crypto:       newTestSigner(2, testN),
 		Transport:    f.net,
-		Clock:        fake.NewClock(time.Unix(0, 0)),
-		Duration:     hotstuff.NewDuration(100*time.Millisecond, time.Second, 2),
+		Clock:        newFakeClock(),
+		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
 		Sink:         recordSink(f.events),
 	})
 	f.core.Start()
@@ -108,7 +104,7 @@ func voteFor(t *testing.T, from ID, b *Block) *VoteMsg {
 	t.Helper()
 	ledger := NewMemLedger()
 	ledger.Speculate(b)
-	signer := nocrypto.New(from, testN)
+	signer := newTestSigner(from, testN)
 	tree := NewBlockTree(from, testQuorum, ledger, signer)
 	v := NewSafety(from, NewVerifier(signer, testQuorum), signer, ledger, tree).MakeVote(b, nil)
 	if v == nil {
@@ -139,7 +135,7 @@ func TestCoreFormsQCFromQuorum(t *testing.T) {
 func timeoutFrom(t *testing.T, from ID) *TimeoutMsg {
 	t.Helper()
 	ledger := NewMemLedger()
-	signer := nocrypto.New(from, testN)
+	signer := newTestSigner(from, testN)
 	tree := NewBlockTree(from, testQuorum, ledger, signer)
 	info := NewSafety(from, NewVerifier(signer, testQuorum), signer, ledger, tree).MakeTimeout(1, genesisQC, nil)
 	if info == nil {
@@ -176,17 +172,17 @@ func TestCoreIgnoresStaleRoundTimer(t *testing.T) {
 }
 
 func TestCoreStopDisarmsTimer(t *testing.T) {
-	clock := fake.NewClock(time.Unix(0, 0))
+	clock := newFakeClock()
 	var events []Event
 	core := New(Config{
 		ID:           1,
 		Validators:   []ID{1, 2, 3, 4},
 		Ledger:       NewMemLedger(),
 		Transactions: NewFIFOPool(16, 2).GetTransactions,
-		Crypto:       nocrypto.New(1, testN),
+		Crypto:       newTestSigner(1, testN),
 		Transport:    &recordNet{},
 		Clock:        clock,
-		Duration:     hotstuff.NewDuration(100*time.Millisecond, time.Second, 2),
+		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
 		Sink:         recordSink(&events),
 	})
 	core.Start()

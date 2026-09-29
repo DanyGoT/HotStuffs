@@ -4,10 +4,6 @@
 // server interface, and gorums.go calls the generated client functions.
 // Package diem itself deals only in domain types, and check-deps enforces
 // exactly that.
-//
-// It is a sibling of package network, which does the same job for package
-// consensus. The two are deliberately not generalised into one: the protocols
-// share no message, and a vote here is unicast where a vote there is broadcast.
 package diemnet
 
 import (

@@ -3,8 +3,7 @@ package diem
 import (
 	"cmp"
 	"slices"
-
-	"github.com/DanyGoT/HotStuffs/hotstuff"
+	"time"
 )
 
 // Pacemaker is the paper's Pacemaker module (3.5): it advances rounds and
@@ -16,7 +15,7 @@ type Pacemaker struct {
 	faulty int
 
 	clock  Clock
-	dur    *hotstuff.Duration
+	dur    *Backoff
 	sink   func(Event)
 	net    Transport
 	safety *Safety
@@ -37,7 +36,7 @@ type timeoutBucket struct {
 
 // NewPacemaker returns a pacemaker at round 0 with no timer armed. Start on
 // Core does the first advance.
-func NewPacemaker(quorum, faulty int, clock Clock, dur *hotstuff.Duration, sink func(Event), net Transport, safety *Safety, tree *BlockTree) *Pacemaker {
+func NewPacemaker(quorum, faulty int, clock Clock, dur *Backoff, sink func(Event), net Transport, safety *Safety, tree *BlockTree) *Pacemaker {
 	return &Pacemaker{
 		quorum:          quorum,
 		faulty:          faulty,
@@ -68,8 +67,7 @@ func (p *Pacemaker) Stop() {
 
 // startTimer enters newRound and arms its timer. The paper leaves the duration
 // formula open — "4*delta, or alpha + beta*commit_gap(r) if delta is unknown" —
-// and this takes the exponential backoff both protocols in this repository
-// share.
+// and this takes an exponential Backoff.
 func (p *Pacemaker) startTimer(newRound Round) {
 	p.Stop()
 	p.currentRound = newRound
@@ -78,7 +76,6 @@ func (p *Pacemaker) startTimer(newRound Round) {
 			delete(p.pendingTimeouts, r) // only the current round can still form a TC
 		}
 	}
-	p.dur.ViewStarted()
 	// The callback runs off the consensus goroutine, so it may only enqueue.
 	p.timer = p.clock.AfterFunc(p.dur.Duration(), func() {
 		p.sink(LocalTimeoutEvent{Round: newRound})
@@ -90,7 +87,7 @@ func (p *Pacemaker) startTimer(newRound Round) {
 // The paper's save_consensus_state() has no counterpart here: the two counters
 // it would persist live in Safety, and this prototype keeps no durable state.
 func (p *Pacemaker) LocalTimeoutRound() {
-	p.dur.ViewTimedOut()
+	p.dur.Grow()
 	info := p.safety.MakeTimeout(p.currentRound, p.tree.HighQC(), p.lastRoundTC)
 	if info == nil {
 		return
@@ -177,8 +174,27 @@ func (p *Pacemaker) AdvanceRoundQC(qc *QC) bool {
 	if qc.Round() < p.currentRound {
 		return false
 	}
-	p.dur.ViewSucceeded()
+	p.dur.Reset()
 	p.lastRoundTC = nil
 	p.startTimer(qc.Round() + 1)
 	return true
 }
+
+// Backoff is the round timer's duration: it grows by a factor on every
+// consecutive timeout, capped at max, and resets when a round succeeds.
+type Backoff struct {
+	base, max time.Duration
+	factor    float64
+	current   time.Duration
+}
+
+// NewBackoff returns a round timer policy starting at base.
+func NewBackoff(base, max time.Duration, factor float64) *Backoff {
+	return &Backoff{base: base, max: max, factor: factor, current: base}
+}
+
+func (b *Backoff) Duration() time.Duration { return b.current }
+
+func (b *Backoff) Reset() { b.current = b.base }
+
+func (b *Backoff) Grow() { b.current = min(time.Duration(float64(b.current)*b.factor), b.max) }

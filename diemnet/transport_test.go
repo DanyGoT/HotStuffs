@@ -2,14 +2,13 @@ package diemnet
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/crypto"
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
 	"github.com/DanyGoT/HotStuffs/diem"
-	"github.com/DanyGoT/HotStuffs/hotstuff"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/relab/gorums"
 	"google.golang.org/grpc"
@@ -21,6 +20,28 @@ const recvTimeout = 5 * time.Second
 // insecureDial is the loopback dial option every test cluster uses; there is
 // no TLS story here, only the transport.
 var insecureDial = gorums.WithGRPCDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+// testKeys caches one key set per group size, so every signer a test builds for
+// a group of n verifies the others' signatures.
+var testKeys = map[int]struct {
+	privs map[diem.ID]*ecdsa.PrivateKey
+	pubs  map[diem.ID]*ecdsa.PublicKey
+}{}
+
+// signer is replica id's signer in a group of n.
+func signer(t *testing.T, id diem.ID, n int) *crypto.Signer {
+	t.Helper()
+	ks, ok := testKeys[n]
+	if !ok {
+		privs, pubs, err := crypto.GenerateKeys(n)
+		if err != nil {
+			t.Fatalf("GenerateKeys: %v", err)
+		}
+		ks.privs, ks.pubs = privs, pubs
+		testKeys[n] = ks
+	}
+	return crypto.New(id, ks.privs[id], ks.pubs)
+}
 
 // recv reads one event off q, failing the test after a generous timeout rather
 // than blocking forever on a bug.
@@ -70,7 +91,7 @@ func newGroup(t *testing.T, n int) []*peer {
 		peers[i] = &peer{
 			tr: New(Config{
 				ID: id, Server: srvs[i], Sink: q.Push,
-				Verifier: diem.NewVerifier(nocrypto.New(id, n), hotstuff.QuorumSize(n)),
+				Verifier: diem.NewVerifier(signer(t, id, n), diem.QuorumSize(n)),
 			}),
 			q: q,
 		}
@@ -95,10 +116,10 @@ func newGroup(t *testing.T, n int) []*peer {
 }
 
 // round1 builds the three message types for round 1 over the genesis
-// certificate, signed by the nocrypto signer for from in a group of n.
+// certificate, signed by from in a group of n.
 func round1(t *testing.T, from diem.ID, n int) (*diem.ProposalMsg, *diem.VoteMsg, *diem.TimeoutMsg) {
 	t.Helper()
-	signer := nocrypto.New(from, n)
+	signer := signer(t, from, n)
 	sign := func(h diem.Hash) diem.Signature {
 		t.Helper()
 		s, err := signer.Sign(h)
@@ -182,9 +203,8 @@ func TestMulticastReachesAll(t *testing.T) {
 	})
 }
 
-// TestVoteIsUnicast is the one place this transport differs from the HotStuff
-// one: DiemBFT 3.1 sends a vote to the next round's leader alone, so exactly
-// one replica must see it and the other three must see nothing.
+// TestVoteIsUnicast: DiemBFT 3.1 sends a vote to the next round's leader alone,
+// so exactly one replica must see it and the other three must see nothing.
 func TestVoteIsUnicast(t *testing.T) {
 	const n, to = 4, diem.ID(3)
 	peers := newGroup(t, n)
@@ -234,7 +254,7 @@ func TestVoteToUnknownReplicaIsDropped(t *testing.T) {
 func TestHandlerRejectsMalformed(t *testing.T) {
 	const n = 4
 	q := diem.NewQueue(8)
-	h := &handler{ver: diem.NewVerifier(nocrypto.New(1, n), hotstuff.QuorumSize(n)), sink: q.Push}
+	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: q.Push}
 	proposal, vote, timeout := round1(t, 1, n)
 
 	forged := diempb.Signature_builder{Signer: 1, Sig: []byte("forged")}.Build()
@@ -297,7 +317,7 @@ func TestHandlerRejectsMalformed(t *testing.T) {
 func TestHandlerAcceptsWellFormed(t *testing.T) {
 	const n = 4
 	q := diem.NewQueue(8)
-	h := &handler{ver: diem.NewVerifier(nocrypto.New(1, n), hotstuff.QuorumSize(n)), sink: q.Push}
+	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: q.Push}
 	proposal, vote, timeout := round1(t, 1, n)
 
 	h.Proposal(gorums.ServerContext{}, toProposal(proposal))
@@ -341,7 +361,7 @@ func TestOutboundQueueDrops(t *testing.T) {
 		// the address given, so the placeholder is never dialed.
 		Peers:    map[uint32]string{1: "127.0.0.1:0"},
 		Sink:     diem.NewQueue(8).Push,
-		Verifier: diem.NewVerifier(nocrypto.New(1, n), hotstuff.QuorumSize(n)),
+		Verifier: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)),
 	})
 	t.Cleanup(tr.Stop)
 	proposal, _, _ := round1(t, 1, n)
@@ -372,7 +392,7 @@ func TestStopIdempotent(t *testing.T) {
 			ID: 1, Listen: "127.0.0.1:0",
 			Peers:    map[uint32]string{1: "127.0.0.1:0"},
 			Sink:     diem.NewQueue(1).Push,
-			Verifier: diem.NewVerifier(nocrypto.New(1, 1), hotstuff.QuorumSize(1)),
+			Verifier: diem.NewVerifier(signer(t, 1, 1), diem.QuorumSize(1)),
 		})
 	}
 
@@ -454,7 +474,7 @@ func newCluster(t *testing.T, n int) []*node {
 		nd.q = diem.NewQueue(1024)
 		nd.tr = New(Config{
 			ID: id, Server: srvs[i], Sink: nd.q.Push,
-			Verifier: diem.NewVerifier(signer, hotstuff.QuorumSize(n)),
+			Verifier: diem.NewVerifier(signer, diem.QuorumSize(n)),
 		})
 		nd.core = diem.New(diem.Config{
 			ID:         id,
@@ -462,8 +482,8 @@ func newCluster(t *testing.T, n int) []*node {
 			Ledger:     ledger,
 			Crypto:     signer,
 			Transport:  nd.tr,
-			Clock:      hotstuff.SystemClock{},
-			Duration:   hotstuff.NewDuration(testRoundBase, testRoundMax, 2),
+			Clock:      diem.SystemClock{},
+			Backoff:    diem.NewBackoff(testRoundBase, testRoundMax, 2),
 			Sink:       nd.q.Push,
 		})
 		nd.loop = diem.NewLoop(nd.core, nd.q)

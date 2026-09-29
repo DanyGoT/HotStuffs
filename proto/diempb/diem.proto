@@ -9,11 +9,6 @@ option features.enforce_naming_style = STYLE_LEGACY;
 import "gorums.proto";
 import "google/protobuf/empty.proto";
 
-// A second file and a second package rather than a second service in
-// hotstuff.proto: Gorums allows one service per .proto file. The two protocols
-// share no message anyway — DiemBFT signs a LedgerCommitInfo where Chained
-// HotStuff signs a (view, block) pair.
-
 // signer is a *claim*: meaningful only once sig verifies against the public key
 // registered for that ID. Gorums exposes no authenticated sender identity, so
 // authentication is by signature, never by connection.
@@ -109,10 +104,9 @@ service Diem {
     option (gorums.multicast) = true;
   }
 
-  // Unicast, unlike the HotStuff service, which broadcasts its votes. DiemBFT
-  // 3.1 sends a vote to the leader of the next round alone, because that leader
-  // is the only replica that will propose over the certificate. Keeping the
-  // paper's mapping here is what makes the two transports comparable.
+  // Unicast: DiemBFT 3.1 sends a vote to the leader of the next round alone,
+  // because that leader is the only replica that will propose over the
+  // certificate.
   rpc Vote(VoteMsg) returns (google.protobuf.Empty) {
     option (gorums.unicast) = true;
   }

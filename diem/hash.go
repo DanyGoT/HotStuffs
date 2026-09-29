@@ -6,7 +6,7 @@ import (
 	"hash"
 )
 
-// Domain tags keep the four things a replica signs apart: a vote signature can
+// Domain tags keep the things a replica signs and hashes apart: a vote signature can
 // never verify as a timeout signature, nor either as a block id. Each digest
 // starts with a distinct byte.
 const (
@@ -49,9 +49,7 @@ func writeSigs(h hash.Hash, sigs []Signature) {
 //
 // The signature set is inside the id, which is what makes the voters for a
 // committed round uniquely determined by the chain: two leaders that certify
-// the same parent with different quorums produce different blocks. That is the
-// opposite of the choice package hotstuff makes, where the block hash covers
-// only the QC's view and certified hash.
+// the same parent with different quorums produce different blocks.
 func blockID(author ID, round Round, payload [][]byte, qc *QC) Hash {
 	h := sha256.New()
 	h.Write([]byte{domainBlock})
