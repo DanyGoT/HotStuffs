@@ -1,37 +1,23 @@
 // Package diem implements the DiemBFT v4 pseudocode of the paper's Section 3,
 // one file per module: Ledger (3.2), Block-tree (3.3), Safety (3.4), Pacemaker
 // (3.5), MemPool (3.6), LeaderElection (3.7) and the Main event loop (3.1).
-// The transcribed pseudocode is in .claude/notes/diembft-pseudocode.md.
-//
-// It is a sibling of package consensus, not a replacement: that one implements
-// Chained HotStuff, which commits on a 3-chain and signs a (view, block) pair,
-// where DiemBFT commits on a contiguous 2-chain and signs a LedgerCommitInfo.
-// The two protocols share the identity, digest, signature and clock vocabulary
-// of package hotstuff, and nothing else.
+// It commits on a contiguous 2-chain and signs a LedgerCommitInfo.
 package diem
 
-import "github.com/DanyGoT/HotStuffs/hotstuff"
+// ID identifies a replica.
+type ID uint32
 
-// Borrowed from package hotstuff so one Crypto implementation serves both
-// protocols. Everything below this line is DiemBFT's own.
-type (
-	ID        = hotstuff.ID
-	Hash      = hotstuff.Hash
-	Signature = hotstuff.Signature
+// Hash is a SHA-256 digest.
+type Hash [32]byte
 
-	// The round timer has the same shape in both protocols, so one fake clock
-	// serves both harnesses.
-	Clock = hotstuff.Clock
-	Timer = hotstuff.Timer
+// Signature. Signer is a *claim*: it means nothing until the signature verifies
+// against the public key registered for that ID.
+type Signature struct {
+	Signer ID
+	Data   []byte
+}
 
-	// Crypto signs and verifies digests. DiemBFT aggregates nothing, so a
-	// certificate is a slice of signatures and there is no combine step.
-	Crypto = hotstuff.Crypto
-)
-
-// Round is a DiemBFT round. The paper's rounds are HotStuff's views under
-// another name, but the two protocols advance them differently, so the type
-// stays separate.
+// Round is a DiemBFT round.
 type Round uint64
 
 // VoteInfo is what a vote says about the block it is cast for. The parent's id

@@ -5,11 +5,10 @@ package diem
 // what lets it run on the network's handler goroutines rather than on the
 // consensus goroutine.
 //
-// One check package hotstuff's verifier makes cannot live here. That one reads
-// the leader of a view straight off the view number; DiemBFT's
-// LeaderElection.GetLeader (3.7) has a reputation path keyed on the committed
-// blocks, so a round's leader is a function of protocol state. The leader check
-// therefore stays where the paper puts it, inside process_proposal_msg.
+// The leader check cannot live here: LeaderElection.GetLeader (3.7) has a
+// reputation path keyed on the committed blocks, so a round's leader is a
+// function of protocol state. It stays where the paper puts it, inside
+// process_proposal_msg.
 type Verifier struct {
 	crypto Crypto
 	quorum int

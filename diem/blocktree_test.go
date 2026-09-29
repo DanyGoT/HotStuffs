@@ -5,15 +5,13 @@ import (
 	"errors"
 	"slices"
 	"testing"
-
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
 )
 
 // newTestTree returns a block tree over a fresh ledger, at the group size and
 // quorum safety_test.go's fixtures use.
 func newTestTree(id ID) (*BlockTree, *MemLedger) {
 	ledger := NewMemLedger()
-	tree := NewBlockTree(id, testQuorum, ledger, nocrypto.New(id, testN))
+	tree := NewBlockTree(id, testQuorum, ledger, newTestSigner(id, testN))
 	return tree, ledger
 }
 
@@ -198,7 +196,7 @@ func (unsignableCrypto) Sign(Hash) (Signature, error) { return Signature{}, erro
 // sign is one no receiver would accept, so it is not worth emitting.
 func TestProcessVoteWithoutAnAuthorSignatureEmitsNoQC(t *testing.T) {
 	ledger := NewMemLedger()
-	tree := NewBlockTree(1, testQuorum, ledger, unsignableCrypto{nocrypto.New(1, testN)})
+	tree := NewBlockTree(1, testQuorum, ledger, unsignableCrypto{newTestSigner(1, testN)})
 	voteInfo := VoteInfo{ID: Hash{0x15}, Round: 1, ParentID: GenesisBlock().ID(), ParentRound: 0}
 	commit := LedgerCommitInfo{VoteInfoHash: VoteInfoHash(voteInfo)}
 

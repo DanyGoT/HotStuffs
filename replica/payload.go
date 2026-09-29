@@ -1,21 +1,11 @@
 package replica
 
-import (
-	"time"
-
-	"github.com/DanyGoT/HotStuffs/hotstuff"
-)
-
-// NoCommands proposes nothing. A view still gets a block, which is all the
-// pipeline needs to keep committing.
-type NoCommands struct{}
-
-func (NoCommands) Poll() ([][]byte, bool) { return nil, false }
+import "time"
 
 // Payload is a synthetic workload: batches of identical commands of a fixed
-// size, capped at a target rate. Poll is called only from the consensus
-// goroutine, so it needs no lock, and it never blocks — it returns nothing when
-// this instant's budget is spent.
+// size, capped at a target rate. Transactions is called only from the
+// consensus goroutine, so it needs no lock, and it never blocks — it returns
+// nothing when this instant's budget is spent.
 type Payload struct {
 	cmd    []byte
 	batch  int
@@ -36,7 +26,8 @@ func NewPayload(size, batch, rate int) *Payload {
 	return &Payload{cmd: make([]byte, size), batch: batch, rate: float64(rate)}
 }
 
-func (p *Payload) Poll() ([][]byte, bool) {
+// Transactions is the paper's MemPool.get_transactions (3.6).
+func (p *Payload) Transactions() [][]byte {
 	n := p.batch
 	if p.rate > 0 {
 		now := time.Now()
@@ -45,7 +36,7 @@ func (p *Payload) Poll() ([][]byte, bool) {
 		}
 		p.last = now
 		if n = min(p.batch, int(p.credit)); n == 0 {
-			return nil, false
+			return nil
 		}
 		p.credit -= float64(n)
 	}
@@ -53,10 +44,5 @@ func (p *Payload) Poll() ([][]byte, bool) {
 	for i := range cmds {
 		cmds[i] = p.cmd // read-only and only ever hashed, so one buffer will do
 	}
-	return cmds, true
+	return cmds
 }
-
-var (
-	_ hotstuff.CommandQueue = NoCommands{}
-	_ hotstuff.CommandQueue = (*Payload)(nil)
-)

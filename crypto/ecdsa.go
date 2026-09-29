@@ -1,4 +1,4 @@
-// Package crypto implements hotstuff.Crypto with ECDSA over P-256.
+// Package crypto implements diem.Crypto with ECDSA over P-256.
 package crypto
 
 import (
@@ -6,35 +6,35 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 
-	"github.com/DanyGoT/HotStuffs/hotstuff"
+	"github.com/DanyGoT/HotStuffs/diem"
 )
 
 // Signer signs with this replica's private key and verifies against the
 // registered public key of the claimed signer.
 type Signer struct {
-	id   hotstuff.ID
+	id   diem.ID
 	key  *ecdsa.PrivateKey
-	keys map[hotstuff.ID]*ecdsa.PublicKey
+	keys map[diem.ID]*ecdsa.PublicKey
 }
 
 // New returns a Signer for replica id. keys holds the public key of every
 // replica, itself included; its size is the replica count, which is what fixes
 // the quorum size.
-func New(id hotstuff.ID, key *ecdsa.PrivateKey, keys map[hotstuff.ID]*ecdsa.PublicKey) *Signer {
+func New(id diem.ID, key *ecdsa.PrivateKey, keys map[diem.ID]*ecdsa.PublicKey) *Signer {
 	return &Signer{id: id, key: key, keys: keys}
 }
 
 // Sign signs msg with this replica's private key.
-func (s *Signer) Sign(msg hotstuff.Hash) (hotstuff.Signature, error) {
+func (s *Signer) Sign(msg diem.Hash) (diem.Signature, error) {
 	der, err := ecdsa.SignASN1(rand.Reader, s.key, msg[:])
 	if err != nil {
-		return hotstuff.Signature{}, err
+		return diem.Signature{}, err
 	}
-	return hotstuff.Signature{Signer: s.id, Data: der}, nil
+	return diem.Signature{Signer: s.id, Data: der}, nil
 }
 
 // Verify checks sig against the registered public key of its claimed signer.
-func (s *Signer) Verify(msg hotstuff.Hash, sig hotstuff.Signature) bool {
+func (s *Signer) Verify(msg diem.Hash, sig diem.Signature) bool {
 	pub, ok := s.keys[sig.Signer]
 	if !ok {
 		return false
@@ -44,26 +44,26 @@ func (s *Signer) Verify(msg hotstuff.Hash, sig hotstuff.Signature) bool {
 
 // VerifyQuorum reports whether sigs holds a quorum of distinct valid
 // signatures over msg.
-func (s *Signer) VerifyQuorum(msg hotstuff.Hash, sigs []hotstuff.Signature) bool {
-	return hotstuff.QuorumReached(len(s.keys), msg, sigs, s.Verify)
+func (s *Signer) VerifyQuorum(msg diem.Hash, sigs []diem.Signature) bool {
+	return diem.QuorumReached(len(s.keys), msg, sigs, s.Verify)
 }
 
 // GenerateKeys returns a private key per replica for IDs 1..n, and the public
 // key map they share. For -local runs and tests; a real deployment
 // distributes keys out of band.
-func GenerateKeys(n int) (map[hotstuff.ID]*ecdsa.PrivateKey, map[hotstuff.ID]*ecdsa.PublicKey, error) {
-	privs := make(map[hotstuff.ID]*ecdsa.PrivateKey, n)
-	pubs := make(map[hotstuff.ID]*ecdsa.PublicKey, n)
+func GenerateKeys(n int) (map[diem.ID]*ecdsa.PrivateKey, map[diem.ID]*ecdsa.PublicKey, error) {
+	privs := make(map[diem.ID]*ecdsa.PrivateKey, n)
+	pubs := make(map[diem.ID]*ecdsa.PublicKey, n)
 	for i := 1; i <= n; i++ {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			return nil, nil, err
 		}
-		id := hotstuff.ID(i)
+		id := diem.ID(i)
 		privs[id] = key
 		pubs[id] = &key.PublicKey
 	}
 	return privs, pubs, nil
 }
 
-var _ hotstuff.Crypto = (*Signer)(nil)
+var _ diem.Crypto = (*Signer)(nil)

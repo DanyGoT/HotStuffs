@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/DanyGoT/HotStuffs/hotstuff"
+	"github.com/DanyGoT/HotStuffs/diem"
 )
 
 // fixedHash returns a Hash of 32 identical bytes, a distinguishable stand-in
 // wherever a test just needs some digest.
-func fixedHash(b byte) hotstuff.Hash {
-	var h hotstuff.Hash
+func fixedHash(b byte) diem.Hash {
+	var h diem.Hash
 	for i := range h {
 		h[i] = b
 	}
@@ -18,13 +18,13 @@ func fixedHash(b byte) hotstuff.Hash {
 }
 
 // newSigners generates keys for n replicas and returns one Signer per ID.
-func newSigners(t *testing.T, n int) map[hotstuff.ID]*Signer {
+func newSigners(t *testing.T, n int) map[diem.ID]*Signer {
 	t.Helper()
 	privs, pubs, err := GenerateKeys(n)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	signers := make(map[hotstuff.ID]*Signer, n)
+	signers := make(map[diem.ID]*Signer, n)
 	for id, key := range privs {
 		signers[id] = New(id, key, pubs)
 	}
@@ -41,7 +41,7 @@ func TestGenerateKeys(t *testing.T) {
 		t.Fatalf("GenerateKeys(%d) = %d privs, %d pubs, want %d each", n, len(privs), len(pubs), n)
 	}
 	for i := 1; i <= n; i++ {
-		id := hotstuff.ID(i)
+		id := diem.ID(i)
 		priv, ok := privs[id]
 		if !ok {
 			t.Fatalf("missing private key for ID %d", id)
@@ -61,7 +61,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	signers := newSigners(t, n)
 	msg := fixedHash(1)
 	for i := 1; i <= n; i++ {
-		id := hotstuff.ID(i)
+		id := diem.ID(i)
 		sig, err := signers[id].Sign(msg)
 		if err != nil {
 			t.Fatalf("ID %d: Sign: %v", id, err)
@@ -86,21 +86,21 @@ func TestVerify(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 
-	tampered := hotstuff.Signature{Signer: sig1.Signer, Data: append([]byte{}, sig1.Data...)}
+	tampered := diem.Signature{Signer: sig1.Signer, Data: append([]byte{}, sig1.Data...)}
 	tampered.Data[0] ^= 0xFF
 
 	tests := []struct {
 		name string
-		sig  hotstuff.Signature
-		msg  hotstuff.Hash
+		sig  diem.Signature
+		msg  diem.Hash
 		want bool
 	}{
 		{"valid", sig1, msg, true},
-		{"rewritten to another replica's ID", hotstuff.Signature{Signer: 2, Data: sig1.Data}, msg, false},
-		{"unregistered signer", hotstuff.Signature{Signer: hotstuff.ID(n + 1), Data: sig1.Data}, msg, false},
+		{"rewritten to another replica's ID", diem.Signature{Signer: 2, Data: sig1.Data}, msg, false},
+		{"unregistered signer", diem.Signature{Signer: diem.ID(n + 1), Data: sig1.Data}, msg, false},
 		{"tampered data", tampered, msg, false},
-		{"empty data", hotstuff.Signature{Signer: 1, Data: []byte{}}, msg, false},
-		{"nil data", hotstuff.Signature{Signer: 1, Data: nil}, msg, false},
+		{"empty data", diem.Signature{Signer: 1, Data: []byte{}}, msg, false},
+		{"nil data", diem.Signature{Signer: 1, Data: nil}, msg, false},
 		{"different digest", sig1, otherMsg, false},
 	}
 	for _, tt := range tests {
@@ -114,9 +114,9 @@ func TestVerifyQuorum(t *testing.T) {
 	const n = 4
 	signers := newSigners(t, n)
 	msg := fixedHash(3)
-	quorum := hotstuff.QuorumSize(n)
+	quorum := diem.QuorumSize(n)
 
-	sign := func(id hotstuff.ID) hotstuff.Signature {
+	sign := func(id diem.ID) diem.Signature {
 		t.Helper()
 		sig, err := signers[id].Sign(msg)
 		if err != nil {
@@ -125,22 +125,22 @@ func TestVerifyQuorum(t *testing.T) {
 		return sig
 	}
 
-	full := make([]hotstuff.Signature, quorum)
+	full := make([]diem.Signature, quorum)
 	for i := range full {
-		full[i] = sign(hotstuff.ID(i + 1))
+		full[i] = sign(diem.ID(i + 1))
 	}
 	// Registered but never signed with: a malformed DER blob under a real ID.
-	garbage := hotstuff.Signature{Signer: hotstuff.ID(quorum + 1), Data: []byte("not a signature")}
+	garbage := diem.Signature{Signer: diem.ID(quorum + 1), Data: []byte("not a signature")}
 
 	tests := []struct {
 		name string
-		sigs []hotstuff.Signature
+		sigs []diem.Signature
 		want bool
 	}{
 		{"exactly quorum distinct", full, true},
 		{"quorum-1", full[:quorum-1], false},
-		{"duplicate signer counted once", append(append([]hotstuff.Signature{}, full[:quorum-1]...), full[0]), false},
-		{"quorum plus one garbage signature", append([]hotstuff.Signature{garbage}, full...), true},
+		{"duplicate signer counted once", append(append([]diem.Signature{}, full[:quorum-1]...), full[0]), false},
+		{"quorum plus one garbage signature", append([]diem.Signature{garbage}, full...), true},
 	}
 	for _, tt := range tests {
 		if got := signers[1].VerifyQuorum(msg, tt.sigs); got != tt.want {
