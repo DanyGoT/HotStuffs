@@ -3,10 +3,6 @@ package diem
 import (
 	"testing"
 	"time"
-
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
-	"github.com/DanyGoT/HotStuffs/hotstuff"
-	"github.com/DanyGoT/HotStuffs/internal/fake"
 )
 
 // recordNet is a Transport double that records what was sent, distinct from
@@ -35,18 +31,18 @@ func recordSink(log *[]Event) func(Event) {
 
 // newTestPacemaker returns a pacemaker for a replica set of size n, replica id
 // 1, wired to test doubles for the clock, sink and transport.
-func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fake.Clock, *recordNet, *[]Event) {
+func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fakeClock, *recordNet, *[]Event) {
 	t.Helper()
-	quorum := hotstuff.QuorumSize(n)
-	faulty := hotstuff.Faulty(n)
-	clock := fake.NewClock(time.Unix(0, 0))
+	quorum := QuorumSize(n)
+	faulty := Faulty(n)
+	clock := newFakeClock()
 	net := &recordNet{}
 	events := new([]Event)
 	ledger := NewMemLedger()
-	crypto := nocrypto.New(1, n)
+	crypto := newTestSigner(1, n)
 	tree := NewBlockTree(1, quorum, ledger, crypto)
 	safety := NewSafety(1, NewVerifier(crypto, quorum), crypto, ledger, tree)
-	dur := hotstuff.NewDuration(10*time.Millisecond, time.Second, 2)
+	dur := NewBackoff(10*time.Millisecond, time.Second, 2)
 	pm := NewPacemaker(quorum, faulty, clock, dur, recordSink(events), net, safety, tree)
 	return pm, clock, net, events
 }
@@ -55,7 +51,7 @@ func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fake.Clock, *recordNet,
 // replica sender's own Safety.MakeTimeout output.
 func timeoutInfoFrom(t *testing.T, sender ID, n int, round, highQCRound Round) TimeoutInfo {
 	t.Helper()
-	sig, err := nocrypto.New(sender, n).Sign(TimeoutDigest(round, highQCRound))
+	sig, err := newTestSigner(sender, n).Sign(TimeoutDigest(round, highQCRound))
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -259,7 +255,7 @@ func TestProcessRemoteTimeoutQuorumFormsValidTC(t *testing.T) {
 		}
 	}
 
-	if !NewVerifier(nocrypto.New(1, 4), 3).VerifyTC(tc) {
+	if !NewVerifier(newTestSigner(1, 4), 3).VerifyTC(tc) {
 		t.Fatal("the TC produced by ProcessRemoteTimeout does not verify at the edge")
 	}
 }
@@ -295,5 +291,31 @@ func TestLocalTimeoutRoundDropsRedundantTC(t *testing.T) {
 	if m := net.timeouts[0]; !m.WellFormed() {
 		t.Fatalf("broadcast an ill-formed timeout: round %d over a high_qc for round %d, carrying a TC for round %d; every honest replica discards it",
 			m.TmoInfo.Round, m.TmoInfo.HighQC.Round(), m.LastRoundTC.Round)
+	}
+}
+
+func TestBackoffGrowsThenResets(t *testing.T) {
+	base, max, factor := 10*time.Millisecond, 80*time.Millisecond, 2.0
+	d := NewBackoff(base, max, factor)
+
+	if got := d.Duration(); got != base {
+		t.Fatalf("Duration() = %v, want base %v", got, base)
+	}
+
+	want := base
+	for i := range 5 {
+		d.Grow()
+		want = min(time.Duration(float64(want)*factor), max)
+		if got := d.Duration(); got != want {
+			t.Fatalf("after %d timeouts, Duration() = %v, want %v", i+1, got, want)
+		}
+	}
+	if got := d.Duration(); got != max {
+		t.Errorf("Duration() = %v, want saturated at max %v", got, max)
+	}
+
+	d.Reset()
+	if got := d.Duration(); got != base {
+		t.Errorf("Duration() after Reset() = %v, want base %v", got, base)
 	}
 }

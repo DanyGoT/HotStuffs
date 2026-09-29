@@ -5,10 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
-	"github.com/DanyGoT/HotStuffs/hotstuff"
-	"github.com/DanyGoT/HotStuffs/internal/fake"
 )
 
 // newLoopFixture is replica 1 of 4 driven through its own queue, so the sink
@@ -21,10 +17,10 @@ func newLoopFixture(t *testing.T, observe func(Event, State, time.Duration)) (*L
 		ID:         1,
 		Validators: []ID{1, 2, 3, 4},
 		Ledger:     NewMemLedger(),
-		Crypto:     nocrypto.New(1, testN),
+		Crypto:     newTestSigner(1, testN),
 		Transport:  net,
-		Clock:      fake.NewClock(time.Unix(0, 0)),
-		Duration:   hotstuff.NewDuration(100*time.Millisecond, time.Second, 2),
+		Clock:      newFakeClock(),
+		Backoff:    NewBackoff(100*time.Millisecond, time.Second, 2),
 		Sink:       q.Push,
 		Observer:   observe,
 	})

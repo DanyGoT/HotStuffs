@@ -1,8 +1,5 @@
-// Command hotstuff runs one replica, or a whole cluster in a single process
-// with -local. -protocol picks which of the two protocols in this repository it
-// runs: Chained HotStuff or DiemBFT. One binary rather than two, because the
-// flag contract, the key generation, the addressing and the NDJSON sampling are
-// identical and only the constructor differs.
+// Command diem runs one DiemBFT replica, or a whole cluster in a single process
+// with -local.
 //
 // The flag names follow benchkit.StandardFlags so that benchkit/cmd/sweep can
 // drive this binary across a cluster later. Adopting the contract costs
@@ -16,7 +13,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -27,8 +23,7 @@ import (
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/crypto"
-	"github.com/DanyGoT/HotStuffs/hotstuff"
-	"github.com/DanyGoT/HotStuffs/metrics"
+	"github.com/DanyGoT/HotStuffs/diem"
 	"github.com/DanyGoT/HotStuffs/replica"
 	"github.com/relab/gorums"
 	"google.golang.org/grpc"
@@ -37,7 +32,6 @@ import (
 
 var (
 	// Acted on.
-	protocol       = flag.String("protocol", protoHotStuff, "consensus protocol: hotstuff or diem")
 	local          = flag.Int("local", 0, "run this many replicas in one process")
 	self           = flag.String("self", "", "this replica's address, which must appear in -remotes")
 	remotes        = flag.String("remotes", "", "comma-separated addresses of every replica, in ID order 1..n")
@@ -47,88 +41,19 @@ var (
 	workers        = flag.Int("workers", 1, "commands per proposal")
 	rate           = flag.Int("rate", 0, "commands per second; 0 is unthrottled")
 	runTime        = flag.Duration("time", 5*time.Second, "how long to run")
-	output         = flag.String("output", "", "write the summary here instead of stdout")
 	verbose        = flag.Bool("verbose", false, "log at debug level")
 	cpuprofile     = flag.String("cpuprofile", "", "write a CPU profile here")
 	faultKillAfter = flag.Duration("fault-kill-after", 0, "stop replica 1 after this long; -local only")
-	viewDuration   = flag.Duration("view-duration", 0, "base view timeout; 0 picks a default")
-
-	statsMode = flag.String("stats-mode", "", `"ndjson" samples metrics every -interval`)
-	interval  = flag.Duration("interval", time.Second, "how often to sample metrics")
+	viewDuration   = flag.Duration("view-duration", 0, "base round timeout; 0 picks a default")
 
 	// Accepted for the benchkit contract; not acted on yet.
+	_ = flag.String("output", "", "unused")
+	_ = flag.String("stats-mode", "", "unused")
+	_ = flag.Duration("interval", time.Second, "unused")
 	_ = flag.String("benchmarks", "", "unused")
 	_ = flag.Int("rate-step", 0, "unused")
 	_ = flag.Duration("call-timeout", 0, "unused")
 )
-
-const (
-	protoHotStuff = "hotstuff"
-	protoDiem     = "diem"
-)
-
-// runner is what running and reporting need from a replica. The two replica
-// types expose different block and counter types, so the adapters below flatten
-// both to commit digests and one counter struct rather than making everything
-// downstream generic.
-type runner interface {
-	ID() hotstuff.ID
-	Run(context.Context) error
-	QueueHighWater() int
-	commits() []hotstuff.Hash
-	counters() counters
-}
-
-// counters is the part of a transport snapshot both protocols share, plus the
-// one number that differs: HotStuff can fail a backfill, DiemBFT has no
-// backfill and instead declines to vote when an ancestor is missing.
-type counters struct {
-	dropped  uint64
-	rejected uint64
-	own      string
-}
-
-type hotstuffRunner struct{ *replica.Replica }
-
-func (r hotstuffRunner) commits() []hotstuff.Hash {
-	log := r.Log()
-	out := make([]hotstuff.Hash, len(log))
-	for i, b := range log {
-		out[i] = b.Hash()
-	}
-	return out
-}
-
-func (r hotstuffRunner) counters() counters {
-	c := r.Replica.Counters()
-	return counters{c.OutboundDropped, c.Rejected, fmt.Sprintf("fetch failures %d", c.FetchFailed)}
-}
-
-type diemRunner struct{ *replica.Diem }
-
-// diem.Hash is hotstuff.Hash, so the two commit logs compare directly.
-func (r diemRunner) commits() []hotstuff.Hash {
-	log := r.Log()
-	out := make([]hotstuff.Hash, len(log))
-	for i, b := range log {
-		out[i] = b.ID()
-	}
-	return out
-}
-
-func (r diemRunner) counters() counters {
-	c := r.Diem.Counters()
-	return counters{c.OutboundDropped, c.Rejected, fmt.Sprintf("declined for a missing ancestor %d", r.DeclinedMissingAncestor())}
-}
-
-// newRunner builds whichever replica -protocol selected. Everything else about
-// the two is identical, which is why one Config serves both.
-func newRunner(cfg replica.Config) runner {
-	if *protocol == protoDiem {
-		return diemRunner{replica.NewDiem(cfg)}
-	}
-	return hotstuffRunner{replica.New(cfg)}
-}
 
 func main() {
 	flag.Parse()
@@ -155,10 +80,6 @@ func run() error {
 			return err
 		}
 		defer pprof.StopCPUProfile()
-	}
-
-	if *protocol != protoHotStuff && *protocol != protoDiem {
-		return fmt.Errorf("-protocol %q: want %q or %q", *protocol, protoHotStuff, protoDiem)
 	}
 
 	switch {
@@ -210,22 +131,17 @@ func runLocal(n int) error {
 	}
 	defer stop()
 
-	reps := make([]runner, n)
-	meters := newMeters(n)
+	reps := make([]*replica.Replica, n)
 	for i := range n {
-		id := hotstuff.ID(i + 1)
-		cfg := replica.Config{
+		id := diem.ID(i + 1)
+		reps[i] = replica.New(replica.Config{
 			ID: id, Key: privs[id], Keys: pubs,
-			Commands:     commands(),
-			ViewDuration: *viewDuration,
+			Transactions: transactions(),
+			RoundTimeout: *viewDuration,
 			Server:       srvs[i],
-		}
-		if meters != nil {
-			cfg.Metrics = meters[i]
-		}
-		reps[i] = newRunner(cfg)
+		})
 	}
-	return runAll(reps, meters)
+	return runAll(reps)
 }
 
 // runOne runs this process's single replica. -remotes lists every replica in ID
@@ -243,7 +159,7 @@ func runOne() error {
 	if *keys == "" {
 		return errors.New("-self needs -keys")
 	}
-	id := hotstuff.ID(idx + 1)
+	id := diem.ID(idx + 1)
 	priv, pubs, err := crypto.ReadKeys(*keys, id)
 	if err != nil {
 		return err
@@ -252,58 +168,24 @@ func runOne() error {
 	for i, addr := range addrs {
 		peers[uint32(i+1)] = addr
 	}
-	meters := newMeters(1)
-	cfg := replica.Config{
+	return runAll([]*replica.Replica{replica.New(replica.Config{
 		ID: id, Peers: peers, Listen: self,
 		Key: priv, Keys: pubs,
-		Commands:     commands(),
-		ViewDuration: *viewDuration,
+		Transactions: transactions(),
+		RoundTimeout: *viewDuration,
 		DialOptions:  dialOptions(),
-	}
-	if meters != nil {
-		cfg.Metrics = meters[0]
-	}
-	return runAll([]runner{newRunner(cfg)}, meters)
-}
-
-// newMeters is one metrics collector per replica, or nil under -protocol diem:
-// the metrics decorators wrap hotstuff.Transport and hotstuff.Executor, neither
-// of which the DiemBFT stack has. diem.Config.Observer is the equivalent hook
-// and wiring it up is separate work.
-func newMeters(n int) []*metrics.Metrics {
-	if *protocol == protoDiem {
-		return nil
-	}
-	meters := make([]*metrics.Metrics, n)
-	for i := range meters {
-		meters[i] = metrics.New(hotstuff.SystemClock{}, 0)
-	}
-	return meters
+	})})
 }
 
 // runAll runs every replica until -time elapses or the process is interrupted,
 // then reports what each committed.
-func runAll(reps []runner, meters []*metrics.Metrics) error {
+func runAll(reps []*replica.Replica) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 	root, stop := context.WithTimeout(root, *runTime)
 	defer stop()
 
 	var wg sync.WaitGroup
-	if *statsMode == "ndjson" && meters != nil {
-		w, closeSamples, err := samplesWriter()
-		if err != nil {
-			return err
-		}
-		defer closeSamples()
-		for i, m := range meters {
-			wg.Go(func() {
-				if err := m.Sample(root, w, *interval); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-					slog.Error("sampling stopped", "id", reps[i].ID(), "err", err)
-				}
-			})
-		}
-	}
 	for i, r := range reps {
 		ctx := root
 		if *faultKillAfter > 0 && i == 0 {
@@ -318,44 +200,24 @@ func runAll(reps []runner, meters []*metrics.Metrics) error {
 		})
 	}
 	wg.Wait()
-	return report(reps, meters)
-}
-
-// samplesWriter is where NDJSON samples go: -output if given, else stderr, so
-// that the end-of-run summary keeps stdout to itself.
-func samplesWriter() (io.Writer, func(), error) {
-	if *output == "" {
-		return os.Stderr, func() {}, nil
-	}
-	f, err := os.Create(*output)
-	if err != nil {
-		return nil, nil, err
-	}
-	return f, func() { f.Close() }, nil
+	return report(reps)
 }
 
 // report prints each replica's committed depth and checks the logs agree over
 // their common prefix, which is the whole point of running the thing.
-func report(reps []runner, meters []*metrics.Metrics) error {
+func report(reps []*replica.Replica) error {
 	w := os.Stdout
-	logs := make([][]hotstuff.Hash, len(reps))
+	logs := make([][]*diem.Block, len(reps))
 	for i, r := range reps {
-		logs[i] = r.commits()
-		c := r.counters()
-		fmt.Fprintf(w, "replica %d: committed %d, dropped %d, %s, rejected %d, queue high-water %d\n",
-			r.ID(), len(logs[i]), c.dropped, c.own, c.rejected, r.QueueHighWater())
-		if meters == nil {
-			continue
-		}
-		if s := meters[i].Snapshot(); s.LatencySamples > 0 {
-			fmt.Fprintf(w, "  commit latency: mean %v over %d samples, max %v\n",
-				time.Duration(s.LatencyTotalNs/s.LatencySamples), s.LatencySamples, time.Duration(s.LatencyMaxNs))
-		}
+		logs[i] = r.Log()
+		c := r.Counters()
+		fmt.Fprintf(w, "replica %d: committed %d, dropped %d, declined for a missing ancestor %d, rejected %d, queue high-water %d\n",
+			r.ID(), len(logs[i]), c.OutboundDropped, r.DeclinedMissingAncestor(), c.Rejected, r.QueueHighWater())
 	}
 	for i := range logs {
 		for j := i + 1; j < len(logs); j++ {
 			for k := range min(len(logs[i]), len(logs[j])) {
-				if logs[i][k] != logs[j][k] {
+				if logs[i][k].ID() != logs[j][k].ID() {
 					return fmt.Errorf("replicas %d and %d disagree at commit %d", reps[i].ID(), reps[j].ID(), k)
 				}
 			}
@@ -390,11 +252,12 @@ func addresses() ([]string, error) {
 	return addrs, nil
 }
 
-func commands() hotstuff.CommandQueue {
+// transactions is the leader's payload source; nil proposes empty blocks.
+func transactions() func() [][]byte {
 	if *payload <= 0 {
-		return replica.NoCommands{}
+		return nil
 	}
-	return replica.NewPayload(*payload, *workers, *rate)
+	return replica.NewPayload(*payload, *workers, *rate).Transactions
 }
 
 // GORUMS: NewLocalServers and any real dial need explicit transport

@@ -3,10 +3,6 @@ package diem
 import (
 	"testing"
 	"time"
-
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
-	"github.com/DanyGoT/HotStuffs/hotstuff"
-	"github.com/DanyGoT/HotStuffs/internal/fake"
 )
 
 // newTestLeaderElection returns a LeaderElection for validators, wired to its
@@ -15,14 +11,14 @@ import (
 func newTestLeaderElection(t *testing.T, validators []ID, window, exclude int) (*LeaderElection, *Pacemaker, *MemLedger) {
 	t.Helper()
 	n := len(validators)
-	quorum := hotstuff.QuorumSize(n)
-	faulty := hotstuff.Faulty(n)
+	quorum := QuorumSize(n)
+	faulty := Faulty(n)
 	ledger := NewMemLedger()
-	crypto := nocrypto.New(1, n)
+	crypto := newTestSigner(1, n)
 	tree := NewBlockTree(1, quorum, ledger, crypto)
 	safety := NewSafety(1, NewVerifier(crypto, quorum), crypto, ledger, tree)
-	dur := hotstuff.NewDuration(10*time.Millisecond, time.Second, 2)
-	pm := NewPacemaker(quorum, faulty, fake.NewClock(time.Unix(0, 0)), dur, func(Event) {}, &recordNet{}, safety, tree)
+	dur := NewBackoff(10*time.Millisecond, time.Second, 2)
+	pm := NewPacemaker(quorum, faulty, newFakeClock(), dur, func(Event) {}, &recordNet{}, safety, tree)
 	le := NewLeaderElection(validators, window, exclude, ledger, pm)
 	return le, pm, ledger
 }

@@ -3,10 +3,6 @@ package diem
 import (
 	"testing"
 	"time"
-
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
-	"github.com/DanyGoT/HotStuffs/hotstuff"
-	"github.com/DanyGoT/HotStuffs/internal/fake"
 )
 
 // sim is a deterministic N-replica harness: one shared fake clock, one FIFO
@@ -14,7 +10,7 @@ import (
 // is fixed, so a failure reproduces exactly.
 type sim struct {
 	t     *testing.T
-	clock *fake.Clock
+	clock *fakeClock
 	ids   []ID
 
 	cores   map[ID]*Core
@@ -39,7 +35,7 @@ func newSim(t *testing.T, n int, down ...ID) *sim {
 	t.Helper()
 	s := &sim{
 		t:       t,
-		clock:   fake.NewClock(time.Unix(0, 0)),
+		clock:   newFakeClock(),
 		cores:   map[ID]*Core{},
 		vers:    map[ID]*Verifier{},
 		pools:   map[ID]*FIFOPool{},
@@ -57,16 +53,16 @@ func newSim(t *testing.T, n int, down ...ID) *sim {
 		ledger.OnCommit = func(b *Block) { s.commits[id] = append(s.commits[id], b) }
 		pool := NewFIFOPool(1024, 2)
 		s.pools[id] = pool
-		s.vers[id] = NewVerifier(nocrypto.New(id, n), hotstuff.QuorumSize(n))
+		s.vers[id] = NewVerifier(newTestSigner(id, n), QuorumSize(n))
 		s.cores[id] = New(Config{
 			ID:           id,
 			Validators:   s.ids,
 			Ledger:       ledger,
 			Transactions: pool.GetTransactions,
-			Crypto:       nocrypto.New(id, n),
+			Crypto:       newTestSigner(id, n),
 			Transport:    &simNet{s: s},
 			Clock:        s.clock,
-			Duration:     hotstuff.NewDuration(simRoundBase, simRoundMax, 2),
+			Backoff:      NewBackoff(simRoundBase, simRoundMax, 2),
 			Sink:         func(e Event) { s.deliver(id, e) },
 		})
 	}
@@ -290,20 +286,20 @@ func (n *dupNet) Timeout(*TimeoutMsg)   { n.timeouts++ }
 // second TC for a round already abandoned.
 func TestDuplicateTimeoutDoesNotRetrigger(t *testing.T) {
 	const n = 4
-	quorum, faulty := hotstuff.QuorumSize(n), hotstuff.Faulty(n)
+	quorum, faulty := QuorumSize(n), Faulty(n)
 
 	ledger := NewMemLedger()
-	signer := nocrypto.New(1, n)
+	signer := newTestSigner(1, n)
 	tree := NewBlockTree(1, quorum, ledger, signer)
 	safety := NewSafety(1, NewVerifier(signer, quorum), signer, ledger, tree)
 	net := &dupNet{}
-	pm := NewPacemaker(quorum, faulty, fake.NewClock(time.Unix(0, 0)),
-		hotstuff.NewDuration(simRoundBase, simRoundMax, 2), func(Event) {}, net, safety, tree)
+	pm := NewPacemaker(quorum, faulty, newFakeClock(),
+		NewBackoff(simRoundBase, simRoundMax, 2), func(Event) {}, net, safety, tree)
 	pm.AdvanceRoundQC(genesisQC) // round 1
 
 	timeout := func(from ID) *TimeoutMsg {
 		t.Helper()
-		s := NewSafety(from, NewVerifier(nocrypto.New(from, n), quorum), nocrypto.New(from, n), NewMemLedger(), tree)
+		s := NewSafety(from, NewVerifier(newTestSigner(from, n), quorum), newTestSigner(from, n), NewMemLedger(), tree)
 		info := s.MakeTimeout(1, genesisQC, nil)
 		if info == nil {
 			t.Fatalf("replica %d refused to time out round 1", from)

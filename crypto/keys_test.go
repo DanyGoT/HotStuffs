@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DanyGoT/HotStuffs/hotstuff"
+	"github.com/DanyGoT/HotStuffs/diem"
 )
 
 // writeCluster puts a fresh n-replica key set in a temporary directory.
@@ -58,7 +58,7 @@ func TestReadKeysRejectsNonContiguousSet(t *testing.T) {
 }
 
 func TestReadKeysRejectsEmptyDirectory(t *testing.T) {
-	if _, _, err := ReadKeys(t.TempDir(), hotstuff.ID(1)); err == nil {
+	if _, _, err := ReadKeys(t.TempDir(), diem.ID(1)); err == nil {
 		t.Fatal("ReadKeys on an empty directory returned no error")
 	}
 }

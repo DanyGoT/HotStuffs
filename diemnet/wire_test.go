@@ -4,9 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
 	"github.com/DanyGoT/HotStuffs/diem"
-	"github.com/DanyGoT/HotStuffs/hotstuff"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"google.golang.org/protobuf/proto"
 )
@@ -332,7 +330,7 @@ func TestGenesisQCRoundTrips(t *testing.T) {
 	if len(got.Signatures) != 0 {
 		t.Errorf("signatures = %d, want 0", len(got.Signatures))
 	}
-	if !diem.NewVerifier(nocrypto.New(1, 4), hotstuff.QuorumSize(4)).VerifyQC(got) {
+	if !diem.NewVerifier(signer(t, 1, 4), diem.QuorumSize(4)).VerifyQC(got) {
 		t.Error("the Verifier rejected a round-tripped genesis certificate")
 	}
 }

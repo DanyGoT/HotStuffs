@@ -3,8 +3,6 @@ package diem
 import (
 	"slices"
 	"testing"
-
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
 )
 
 // The tests here cover the boundary the paper delegates to "other parts of the
@@ -15,7 +13,7 @@ import (
 // newTestVerifier returns the Verifier for the 4-replica group testN and
 // testQuorum describe.
 func newTestVerifier() *Verifier {
-	return NewVerifier(nocrypto.New(1, testN), testQuorum)
+	return NewVerifier(newTestSigner(1, testN), testQuorum)
 }
 
 // TestVerifyRejectsNonCanonicalCertificates pins the canonical signer order on
@@ -86,8 +84,7 @@ func TestVerifyProposalRejectsCertificateAtOrAboveItsOwnRound(t *testing.T) {
 
 // TestVerifyTCRejectsRoundZero covers a guard, not a fix: safeToTimeout
 // refuses round 0, so a quorum of round-0 timeouts is unreachable from honest
-// replicas and no bug was ever exploitable here. The check is free and it keeps
-// this verifier and package hotstuff's symmetric.
+// replicas and no bug was ever exploitable here. The check is free.
 func TestVerifyTCRejectsRoundZero(t *testing.T) {
 	if newTestVerifier().VerifyTC(makeTC(0, 1, 2, 3)) {
 		t.Error("VerifyTC = true for a TC claiming round 0, want false")

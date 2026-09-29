@@ -1,5 +1,5 @@
-GO_DIRS := hotstuff crypto blockchain consensus diem network diemnet simnet replica cmd internal
-PROTO   := proto/hotstuffpb/hotstuff.proto proto/diempb/diem.proto
+GO_DIRS := diem crypto diemnet replica cmd
+PROTO   := proto/diempb/diem.proto
 BIN     := $(CURDIR)/bin
 PLUGINS := $(BIN)/protoc-gen-go $(BIN)/protoc-gen-gorums
 
@@ -31,10 +31,10 @@ race:
 # The dependency direction, enforced mechanically rather than by discipline.
 check-deps:
 	@# a dot in the first path element means a domain, i.e. not stdlib
-	@! go list -f '{{join .Deps "\n"}}' ./hotstuff | grep -q '^[^/]*\.'
-	@! grep -rq --include='*.go' 'hotstuffpb\|relab/gorums' $(wildcard hotstuff crypto blockchain consensus diem) /dev/null
-	@! grep -rEq --include='*.go' '^[[:space:]]*go ' $(wildcard hotstuff consensus diem) /dev/null
-	@! grep -rq --include='*.go' 'reflect\.' $(wildcard $(GO_DIRS)) /dev/null
+	@! go list -f '{{join .Deps "\n"}}' ./diem | grep -q '^[^/]*\.'
+	@! grep -rq --include='*.go' 'diempb\|relab/gorums' diem crypto
+	@! grep -rEq --include='*.go' '^[[:space:]]*go ' diem
+	@! grep -rq --include='*.go' 'reflect\.' $(GO_DIRS)
 	@echo "check-deps: ok"
 
 clean:

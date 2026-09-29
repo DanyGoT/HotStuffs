@@ -2,12 +2,10 @@ package diem
 
 import (
 	"testing"
-
-	"github.com/DanyGoT/HotStuffs/crypto/nocrypto"
 )
 
 // testN and testQuorum give a 4-replica group (f=1, quorum=2f+1=3), matching
-// hotstuff.QuorumSize(testN).
+// QuorumSize(testN).
 const (
 	testN      = 4
 	testQuorum = 3
@@ -23,7 +21,7 @@ type safetyFixture struct {
 
 func newSafetyFixture(id ID) *safetyFixture {
 	ledger := NewMemLedger()
-	crypto := nocrypto.New(id, testN)
+	crypto := newTestSigner(id, testN)
 	tree := NewBlockTree(id, testQuorum, ledger, crypto)
 	return &safetyFixture{
 		safety: NewSafety(id, NewVerifier(crypto, testQuorum), crypto, ledger, tree),
@@ -32,9 +30,9 @@ func newSafetyFixture(id ID) *safetyFixture {
 	}
 }
 
-// signAs signs digest as replica id. nocrypto never fails to sign.
+// signAs signs digest as replica id. testSigner never fails to sign.
 func signAs(id ID, digest Hash) Signature {
-	sig, _ := nocrypto.New(id, testN).Sign(digest)
+	sig, _ := newTestSigner(id, testN).Sign(digest)
 	return sig
 }
 

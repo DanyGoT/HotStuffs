@@ -55,10 +55,9 @@ func Proposal(ctx *ConfigContext, in *ProposalMsg) *gorums.OnewayCall[*ProposalM
 	return gorumsimpl.Multicast(ctx, in, "diempb.Diem.Proposal")
 }
 
-// Unicast, unlike the HotStuff service, which broadcasts its votes. DiemBFT
-// 3.1 sends a vote to the leader of the next round alone, because that leader
-// is the only replica that will propose over the certificate. Keeping the
-// paper's mapping here is what makes the two transports comparable.
+// Unicast: DiemBFT 3.1 sends a vote to the leader of the next round alone,
+// because that leader is the only replica that will propose over the
+// certificate.
 //
 // Example:
 //
