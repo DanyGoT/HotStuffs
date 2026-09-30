@@ -15,6 +15,8 @@ require (
 
 require (
 	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/relab/gorums/benchkit v0.0.0-20260812123016-1077e6cd0466 // indirect
+	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
