@@ -1,15 +1,16 @@
 // Command diem runs one DiemBFT replica, or a whole cluster in a single process
 // with -local.
 //
-// The flag names follow benchkit.StandardFlags so that benchkit/cmd/sweep can
-// drive this binary across a cluster later. Adopting the contract costs
-// nothing; adopting the dependency is deliberately deferred. Flags the
-// prototype does not act on yet are accepted and ignored rather than dropped,
-// so the contract stays whole.
+// The flag names follow benchkit.StandardFlags and -output writes a benchkit
+// result file, so benchkit/cmd/sweep can drive this binary across a cluster.
+// Flags the prototype does not act on yet are accepted and ignored rather than
+// dropped, so the contract stays whole.
 package main
 
 import (
+	"cmp"
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"github.com/DanyGoT/HotStuffs/diem"
 	"github.com/DanyGoT/HotStuffs/replica"
 	"github.com/relab/gorums"
+	"github.com/relab/gorums/benchkit"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -35,19 +37,19 @@ var (
 	local          = flag.Int("local", 0, "run this many replicas in one process")
 	self           = flag.String("self", "", "this replica's address, which must appear in -remotes")
 	remotes        = flag.String("remotes", "", "comma-separated addresses of every replica, in ID order 1..n")
-	keys           = flag.String("keys", "", "directory holding <id>.key and <id>.pub")
+	keys           = flag.String("keys", "", "directory holding <id>.key and <id>.pub; empty uses insecure seeded keys")
 	genKeys        = flag.Bool("gen-keys", false, "write a key pair per replica into -keys and exit")
 	payload        = flag.Int("payload", 0, "bytes per command; 0 proposes empty blocks")
 	workers        = flag.Int("workers", 1, "commands per proposal")
 	rate           = flag.Int("rate", 0, "commands per second; 0 is unthrottled")
 	runTime        = flag.Duration("time", 5*time.Second, "how long to run")
+	output         = flag.String("output", "", "write a benchkit result file here")
 	verbose        = flag.Bool("verbose", false, "log at debug level")
 	cpuprofile     = flag.String("cpuprofile", "", "write a CPU profile here")
 	faultKillAfter = flag.Duration("fault-kill-after", 0, "stop replica 1 after this long; -local only")
 	viewDuration   = flag.Duration("view-duration", 0, "base round timeout; 0 picks a default")
 
 	// Accepted for the benchkit contract; not acted on yet.
-	_ = flag.String("output", "", "unused")
 	_ = flag.String("stats-mode", "", "unused")
 	_ = flag.Duration("interval", time.Second, "unused")
 	_ = flag.String("benchmarks", "", "unused")
@@ -144,6 +146,20 @@ func runLocal(n int) error {
 	return runAll(reps)
 }
 
+// replicaKeys reads id's keys from -keys, or without it derives the seeded
+// set every replica computes alike.
+func replicaKeys(id diem.ID, n int) (*ecdsa.PrivateKey, map[diem.ID]*ecdsa.PublicKey, error) {
+	if *keys != "" {
+		return crypto.ReadKeys(*keys, id)
+	}
+	slog.Warn("no -keys: using insecure seeded keys")
+	privs, pubs, err := crypto.SeededKeys(n)
+	if err != nil {
+		return nil, nil, err
+	}
+	return privs[id], pubs, nil
+}
+
 // runOne runs this process's single replica. -remotes lists every replica in ID
 // order, so a replica's position in that list is its ID.
 func runOne() error {
@@ -156,11 +172,8 @@ func runOne() error {
 	if idx < 0 {
 		return fmt.Errorf("-self %q does not appear in -remotes", self)
 	}
-	if *keys == "" {
-		return errors.New("-self needs -keys")
-	}
 	id := diem.ID(idx + 1)
-	priv, pubs, err := crypto.ReadKeys(*keys, id)
+	priv, pubs, err := replicaKeys(id, len(addrs))
 	if err != nil {
 		return err
 	}
@@ -182,6 +195,7 @@ func runOne() error {
 func runAll(reps []*replica.Replica) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	start := time.Now()
 	root, stop := context.WithTimeout(root, *runTime)
 	defer stop()
 
@@ -200,7 +214,44 @@ func runAll(reps []*replica.Replica) error {
 		})
 	}
 	wg.Wait()
-	return report(reps)
+	elapsed := time.Since(start)
+	if err := report(reps); err != nil {
+		return err
+	}
+	if *output == "" {
+		return nil
+	}
+	return writeResults(reps, elapsed)
+}
+
+// writeResults writes one benchkit Result per replica to -output, so
+// benchkit/cmd/sweep can collect it. An op is a committed block.
+func writeResults(reps []*replica.Replica, elapsed time.Duration) error {
+	n := *local
+	if n == 0 {
+		addrs, err := addresses()
+		if err != nil {
+			return err
+		}
+		n = len(addrs)
+	}
+	results := make([]*benchkit.Result, len(reps))
+	for i, r := range reps {
+		cfg := benchkit.NewRunConfig(benchkit.Dimensions{
+			Benchmark: "diem", Nodes: n,
+			Workers: *workers, Payload: *payload, Rate: *rate,
+		})
+		cfg.SetDuration(runTime.Nanoseconds())
+		ops := uint64(len(r.Log()))
+		results[i] = benchkit.Result_builder{
+			Config:     cfg,
+			TotalOps:   ops,
+			TotalTime:  elapsed.Nanoseconds(),
+			Throughput: float64(ops) / elapsed.Seconds(),
+		}.Build()
+	}
+	label := cmp.Or(*self, "local")
+	return benchkit.WriteLabeledReport(results, label, *output)
 }
 
 // report prints each replica's committed depth and checks the logs agree over

@@ -56,6 +56,34 @@ func TestGenerateKeys(t *testing.T) {
 	}
 }
 
+func TestSeededKeysAgreeAcrossCalls(t *testing.T) {
+	const n = 4
+	privsA, _, err := SeededKeys(n)
+	if err != nil {
+		t.Fatalf("SeededKeys: %v", err)
+	}
+	_, pubsB, err := SeededKeys(n)
+	if err != nil {
+		t.Fatalf("SeededKeys: %v", err)
+	}
+	msg := fixedHash(1)
+	for id, key := range privsA {
+		sig, err := New(id, key, pubsB).Sign(msg)
+		if err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
+		// A separate process verifies with its own call's public keys.
+		if !New(1, nil, pubsB).Verify(msg, sig) {
+			t.Errorf("ID %d: signature from one call does not verify against another's keys", id)
+		}
+		for other, pub := range pubsB {
+			if other != id && pub.Equal(&key.PublicKey) {
+				t.Errorf("IDs %d and %d share a key", id, other)
+			}
+		}
+	}
+}
+
 func TestSignVerifyRoundTrip(t *testing.T) {
 	const n = 4
 	signers := newSigners(t, n)

@@ -5,6 +5,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
 
 	"github.com/DanyGoT/HotStuffs/diem"
 )
@@ -64,6 +67,39 @@ func GenerateKeys(n int) (map[diem.ID]*ecdsa.PrivateKey, map[diem.ID]*ecdsa.Publ
 		pubs[id] = &key.PublicKey
 	}
 	return privs, pubs, nil
+}
+
+// SeededKeys is GenerateKeys without randomness: replica id's private key is
+// derived from SHA-256 of id, so every process computes the same set with no
+// key files. Anyone can derive them; for benchmarks and tests only.
+func SeededKeys(n int) (map[diem.ID]*ecdsa.PrivateKey, map[diem.ID]*ecdsa.PublicKey, error) {
+	privs := make(map[diem.ID]*ecdsa.PrivateKey, n)
+	pubs := make(map[diem.ID]*ecdsa.PublicKey, n)
+	for i := 1; i <= n; i++ {
+		id := diem.ID(i)
+		key, err := seededKey(id)
+		if err != nil {
+			return nil, nil, err
+		}
+		privs[id] = key
+		pubs[id] = &key.PublicKey
+	}
+	return privs, pubs, nil
+}
+
+// seededKey hashes id with a counter until the digest is a valid P-256 scalar,
+// which the first attempt almost always is.
+func seededKey(id diem.ID) (*ecdsa.PrivateKey, error) {
+	var buf [8]byte
+	binary.BigEndian.PutUint32(buf[:4], uint32(id))
+	for ctr := range uint32(16) {
+		binary.BigEndian.PutUint32(buf[4:], ctr)
+		d := sha256.Sum256(buf[:])
+		if key, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), d[:]); err == nil {
+			return key, nil
+		}
+	}
+	return nil, fmt.Errorf("replica %d: no valid seeded key", id)
 }
 
 var _ diem.Crypto = (*Signer)(nil)
