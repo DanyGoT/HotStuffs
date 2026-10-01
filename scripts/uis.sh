@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# uis.sh — run DiemBFT on the UiS bbchain VMs through Gorums' benchkit sweep,
-# one replica per VM. sweep hands each node -self/-remotes; with no -keys the
-# replicas derive the same seeded key set, so nothing but the binary is shipped.
+# uis.sh — run DiemBFT on the UiS VMs (pitter1-15) through Gorums' benchkit
+# sweep, one replica per VM. sweep hands each node -self/-remotes; with no
+# -keys the replicas derive the same seeded key set, so nothing but the binary
+# is shipped.
 #
 # Usage: scripts/uis.sh <command>
 #   ssh-config  print the ~/.ssh/config block sweep needs (needs UIS_USER)
@@ -16,7 +17,7 @@
 #   all         check, smoke, scale, load and rate, back to back
 #
 # Environment:
-#   HOSTS    sweep host pattern (default 'bb[1-10]'); scale needs 10 of them,
+#   HOSTS    sweep host pattern (default 'pitter[1-10]'); scale needs 10 of them,
 #            long needs 5 because the driver sits out of the pool
 #   GORUMS   Gorums checkout holding benchkit (default ~/sync/skole/26H/DAT620/gorums)
 #   OUT      where results land (default <repo>/out/uis)
@@ -25,7 +26,7 @@ set -euo pipefail
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 gorums=${GORUMS:-$HOME/sync/skole/26H/DAT620/gorums}
-hosts=${HOSTS:-bb[1-10]}
+hosts=${HOSTS:-pitter[1-10]}
 out=${OUT:-$repo/out/uis}
 bin=$repo/bin/diem-linux-amd64
 sweepbin=$repo/bin/sweep
@@ -52,15 +53,13 @@ case ${1:-} in
 ssh-config)
     : "${UIS_USER:?set UIS_USER to your UiS username}"
     cat <<EOF
-Host uis-gw
-  HostName ssh.ux.uis.no
+Host uis
+  HostName ssh4.ux.uis.no
   User $UIS_USER
 
-Host bb*
-  HostName %h.ux.uis.no
+Host pitter*
   User $UIS_USER
-  ProxyJump uis-gw
-  ForwardAgent yes
+  ProxyJump uis
 EOF
     ;;
 check) build && sweep -hosts "$hosts" -check ;;
