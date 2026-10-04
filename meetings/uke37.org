@@ -1,0 +1,50 @@
+#+title: Uke37
+
+* Meeting: Date
+
+- Attendees: Leander, Alexander
+
+** Progress Update
+
+- Coding
+  -
+- Writing
+  -
+- Reading
+  -
+- Admin
+  -
+- Other
+  -
+
+** Questions
+
+-
+-
+
+** Discussion Notes
+
+- Se på om når for eksempel en leader skal sende en melding, om den bør sende
+  melding til seg selv (ha seg selv med som en node i gorums), eller ha dette
+  implisit i kode? For eksempel quorum er 2f i stedet for 2f+1 (altså -1 pga implisit)
+- Gjerne fullføre basisimplementasjonen, forstå den og prøv å kjøre den på uis
+  sine servere.
+- Sammenligne event-loop vs mutex vs noe annet?
+- Se på hvordan out of order meldinger kan skape problemer, trenger vi å gjøre
+  noe ekstra med disse? For eksempel putte meldingen bakerst i f.eks. event-loop køen
+- Eksperimentere litt med valg, og se om hvorfor og hvorfor ikke det er gode valg.
+- Bør vente med et reputation system for leader choice som beskrevet i diem, og
+  bruke den vanlige l+1 view-changen intil videre, gjerne ha denne bak et
+  interface eller noe så man kan prøve ut litt forskjellig. Enig selv i
+  interface, og bør bruke det i hele systemet for å ha en modulær og kul tilnerming.
+- Fortsette å lese videre på litteratur, skrive rapport osv. Jeg er litt nuub
+  på både hotstuff og gorums
+- Egne tanker utenfor møtet:
+  - Bør lage en kommunikasjons-flowchart typ for å visualisere faser
+  - Kanskje ta bilde av pseudokoden og lage flow ut av det (ved å tegne piler
+    eller noe)
+
+** Action Items
+
+-
+-
