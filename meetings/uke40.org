@@ -1,0 +1,13 @@
+Tenker to ting:
+
+Det er nice med at nettverket er et interface for teste-muligheter
+Det hadde vært vits å teste med å bli kvitt translation. Bare bruke typene direkte fra Protobuf, og ikke kopiere over til en ny struktur.
+
+I stedet for å definere structs som for eksempel QC, VoteInfor... Kanskje implementere de som Interfaces? Eller bare bruke typen direkte? Teste begge!
+Trenger man i det hele tatt en set? Så egentlig read-only interface. Det er tross alt en mottatt melding og ikke noe man trenger å endre på.
+
+Før endringene: Benchmark og test på pitter serverene og sammelign performance og alt det der. Gøy å sammenligne versjonene.
+Da kan man ta evaluering av designvalg
+Kan kalle denne en v0.1
+Skal vi gi glipp på for eksempel typene Round og ID? Begge er uint32, det gir typesafety men er det så viktig? Kan alltids caste til typen fra uint32 eller noe slikt.
+
