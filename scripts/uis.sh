@@ -8,17 +8,18 @@
 #   ssh-config  print the ~/.ssh/config block sweep needs (needs UIS_USER)
 #   check       sweep's own diagnostics: ssh, jump host, clocks, ports
 #   smoke       n=4, 10s — does it commit at all
-#   scale       n=4,7,10, 30s each
-#   load        n=4, payload 0/128/1024 x workers 1/16, 30s each
-#   rate        n=4, 128-byte commands at 100/1000/10000 per second, 30s each
+#   scale       n=4,7,10,13 x payload 0/1024, batch 64
+#   load        n=4, payload 128/1024/4096 x batch 1/16/256
+#   rate        n=4, 1 KiB commands, batch 256, at 500/2000/8000/unthrottled per second
+#               scale, load and rate run 20s per point, 3 repetitions
 #   long        n=4 for 10 minutes, detached on a driver VM
 #   collect     fetch the results of the last detached run
 #   plot DIR    render the report for one collected run directory under $OUT
 #   all         check, smoke, scale, load and rate, back to back
 #
 # Environment:
-#   HOSTS    sweep host pattern (default 'pitter[1-10]'); scale needs 10 of them,
-#            long needs 5 because the driver sits out of the pool
+#   HOSTS    sweep host pattern (default 'pitter[1-15]'); scale needs 14 and long 5,
+#            because their driver sits out of the pool
 #   GORUMS   Gorums checkout holding benchkit (default ~/sync/skole/26H/DAT620/gorums)
 #   OUT      where results land (default <repo>/out/uis)
 #   UIS_USER your UiS username, for ssh-config only
@@ -26,7 +27,7 @@ set -euo pipefail
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 gorums=${GORUMS:-$HOME/sync/skole/26H/DAT620/gorums}
-hosts=${HOSTS:-pitter[1-10]}
+hosts=${HOSTS:-pitter[1-15]}
 out=${OUT:-$repo/out/uis}
 bin=$repo/bin/diem-linux-amd64
 sweepbin=$repo/bin/sweep
@@ -49,6 +50,12 @@ run() {
     sweep -hosts "$hosts" -binary "$bin" -benchmarks diem -outdir "$out" -sweep "$label" "$@"
 }
 
+# -workers is diem's batch: commands per proposal. Payload 0 proposes empty
+# blocks, so batch only matters with a payload.
+scale() { run scale -driver first -n 4,7,10,13 -payload 0,1024 -workers 64 -reps 3 -duration 20s; }
+load() { run load -n 4 -payload 128,1024,4096 -workers 1,16,256 -reps 3 -duration 20s; }
+rate() { run rate -n 4 -payload 1024 -workers 256 -rate 500,2000,8000,0 -reps 3 -duration 20s; }
+
 case ${1:-} in
 ssh-config)
     : "${UIS_USER:?set UIS_USER to your UiS username}"
@@ -64,9 +71,9 @@ EOF
     ;;
 check) build && sweep -hosts "$hosts" -check ;;
 smoke) build && run smoke -n 4 -duration 10s ;;
-scale) build && run scale -n 4,7,10 -duration 30s ;;
-load) build && run load -n 4 -payload 0,128,1024 -workers 1,16 -duration 30s ;;
-rate) build && run rate -n 4 -payload 128 -workers 16 -rate 100,1000,10000 -duration 30s ;;
+scale) build && scale ;;
+load) build && load ;;
+rate) build && rate ;;
 long) build && run long -n 4 -duration 10m -driver first -detach ;;
 collect) build && sweep -outdir "$out" -collect ;;
 plot) build && sweep -plot "${2:?pass a run directory under $out}" ;;
@@ -74,9 +81,9 @@ all)
     build
     sweep -hosts "$hosts" -check
     run smoke -n 4 -duration 10s
-    run scale -n 4,7,10 -duration 30s
-    run load -n 4 -payload 0,128,1024 -workers 1,16 -duration 30s
-    run rate -n 4 -payload 128 -workers 16 -rate 100,1000,10000 -duration 30s
+    scale
+    load
+    rate
     ls "$out"
     ;;
 *)
