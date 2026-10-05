@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"runtime/trace"
 	"slices"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ var (
 	output         = flag.String("output", "", "write a benchkit result file here")
 	verbose        = flag.Bool("verbose", false, "log at debug level")
 	cpuprofile     = flag.String("cpuprofile", "", "write a CPU profile here")
+	traceFile      = flag.String("trace", "", "write an execution trace here")
 	faultKillAfter = flag.Duration("fault-kill-after", 0, "stop replica 1 after this long; -local only")
 	viewDuration   = flag.Duration("view-duration", 0, "base round timeout; 0 picks a default")
 
@@ -82,6 +84,17 @@ func run() error {
 			return err
 		}
 		defer pprof.StopCPUProfile()
+	}
+	if *traceFile != "" {
+		f, err := os.Create(*traceFile)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if err := trace.Start(f); err != nil {
+			return err
+		}
+		defer trace.Stop()
 	}
 
 	switch {
@@ -225,7 +238,8 @@ func runAll(reps []*replica.Replica) error {
 }
 
 // writeResults writes one benchkit Result per replica to -output, so
-// benchkit/cmd/sweep can collect it. An op is a committed block.
+// benchkit/cmd/sweep can collect it. An op is a committed block, and its
+// latency is propose to commit at the replica that proposed it.
 func writeResults(reps []*replica.Replica, elapsed time.Duration) error {
 	n := *local
 	if n == 0 {
@@ -243,11 +257,17 @@ func writeResults(reps []*replica.Replica, elapsed time.Duration) error {
 		})
 		cfg.SetDuration(runTime.Nanoseconds())
 		ops := uint64(len(r.Log()))
+		lats := r.Latencies()
+		ns := make([]int64, len(lats))
+		for j, l := range lats {
+			ns[j] = l.Nanoseconds()
+		}
 		results[i] = benchkit.Result_builder{
 			Config:     cfg,
 			TotalOps:   ops,
 			TotalTime:  elapsed.Nanoseconds(),
 			Throughput: float64(ops) / elapsed.Seconds(),
+			Latencies:  ns,
 		}.Build()
 	}
 	label := cmp.Or(*self, "local")
@@ -262,8 +282,8 @@ func report(reps []*replica.Replica) error {
 	for i, r := range reps {
 		logs[i] = r.Log()
 		c := r.Counters()
-		fmt.Fprintf(w, "replica %d: committed %d, dropped %d, declined for a missing ancestor %d, rejected %d, queue high-water %d\n",
-			r.ID(), len(logs[i]), c.OutboundDropped, r.DeclinedMissingAncestor(), c.Rejected, r.QueueHighWater())
+		fmt.Fprintf(w, "replica %d: committed %d (%d commands), dropped %d, declined for a missing ancestor %d, rejected %d, queue high-water %d\n",
+			r.ID(), len(logs[i]), r.Commands(), c.OutboundDropped, r.DeclinedMissingAncestor(), c.Rejected, r.QueueHighWater())
 	}
 	for i := range logs {
 		for j := i + 1; j < len(logs); j++ {
