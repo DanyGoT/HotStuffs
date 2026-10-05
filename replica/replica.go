@@ -57,8 +57,14 @@ type Replica struct {
 	// mu guards the commit log, which the ledger appends to on the consensus
 	// goroutine and callers read from their own. It guards application state,
 	// never protocol state.
-	mu      sync.Mutex
-	commits []*diem.Block
+	mu        sync.Mutex
+	commits   []*diem.Block
+	latencies []time.Duration
+	commands  uint64
+
+	// proposed is when this replica sent its proposal for each round it led and
+	// has not yet seen committed. Only the consensus goroutine touches it.
+	proposed map[diem.Round]time.Time
 
 	// declined mirrors diem.State.DeclinedMissingAncestor out of the loop
 	// goroutine, which is the only way to read it: the core's state is not
@@ -92,7 +98,7 @@ func New(cfg Config) *Replica {
 	signer := crypto.New(cfg.ID, cfg.Key, cfg.Keys)
 	q := diem.NewQueue(cfg.QueueSize)
 
-	r := &Replica{id: cfg.ID, q: q}
+	r := &Replica{id: cfg.ID, q: q, proposed: map[diem.Round]time.Time{}}
 	ledger := diem.NewMemLedger()
 	ledger.OnCommit = r.commit
 
@@ -110,7 +116,7 @@ func New(cfg Config) *Replica {
 		Validators:   validators,
 		Ledger:       ledger,
 		Crypto:       signer,
-		Transport:    r.net,
+		Transport:    stamper{r.net, r.proposed},
 		Clock:        diem.SystemClock{},
 		Backoff:      diem.NewBackoff(cfg.RoundTimeout, cfg.MaxRoundTimeout, backoffFactor),
 		Sink:         q.Push,
@@ -123,9 +129,36 @@ func New(cfg Config) *Replica {
 	return r
 }
 
+// stamper records when this replica sends each of its proposals.
+type stamper struct {
+	*diemnet.Transport
+	proposed map[diem.Round]time.Time
+}
+
+func (s stamper) Proposal(p *diem.ProposalMsg) {
+	s.proposed[p.Block.Round] = time.Now()
+	s.Transport.Proposal(p)
+}
+
+// commit appends b to the log and, for a block this replica proposed, records
+// its propose-to-commit latency. Rounds at or below b's can no longer commit
+// a block of this replica's, so their stamps go too.
 func (r *Replica) commit(b *diem.Block) {
+	var lat time.Duration
+	if t, ok := r.proposed[b.Round]; ok && b.Author == r.id {
+		lat = time.Since(t)
+		for round := range r.proposed {
+			if round <= b.Round {
+				delete(r.proposed, round)
+			}
+		}
+	}
 	r.mu.Lock()
 	r.commits = append(r.commits, b)
+	r.commands += uint64(len(b.Payload))
+	if lat > 0 {
+		r.latencies = append(r.latencies, lat)
+	}
 	r.mu.Unlock()
 }
 
@@ -186,6 +219,21 @@ func (r *Replica) Log() []*diem.Block {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]*diem.Block(nil), r.commits...)
+}
+
+// Latencies is the propose-to-commit latency of each committed block this
+// replica proposed, measured on its own clock.
+func (r *Replica) Latencies() []time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.latencies)
+}
+
+// Commands is how many commands the committed blocks carried.
+func (r *Replica) Commands() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.commands
 }
 
 // Counters is what the transport had to discard.
