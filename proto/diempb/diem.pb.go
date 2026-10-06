@@ -608,14 +608,17 @@ func (b0 TimeoutCert_builder) Build() *TimeoutCert {
 	return m0
 }
 
-// No id field: the receiver recomputes it from the fields, so no digest is ever
-// taken from the wire.
+// id is a claim, like every digest on the wire: nothing trusts it until the
+// receiving edge has recomputed it from the other fields. It is carried only
+// because computing it hashes the whole payload, which the core must not repeat
+// for every use.
 type Block struct {
 	state              protoimpl.MessageState `protogen:"opaque.v1"`
 	xxx_hidden_Author  uint32                 `protobuf:"varint,1,opt,name=author"`
 	xxx_hidden_Round   uint64                 `protobuf:"varint,2,opt,name=round"`
 	xxx_hidden_Payload [][]byte               `protobuf:"bytes,3,rep,name=payload"`
 	xxx_hidden_Qc      *QuorumCert            `protobuf:"bytes,4,opt,name=qc"`
+	xxx_hidden_Id      []byte                 `protobuf:"bytes,5,opt,name=id"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -673,6 +676,13 @@ func (x *Block) GetQc() *QuorumCert {
 	return nil
 }
 
+func (x *Block) GetId() []byte {
+	if x != nil {
+		return x.xxx_hidden_Id
+	}
+	return nil
+}
+
 func (x *Block) SetAuthor(v uint32) {
 	x.xxx_hidden_Author = v
 }
@@ -687,6 +697,13 @@ func (x *Block) SetPayload(v [][]byte) {
 
 func (x *Block) SetQc(v *QuorumCert) {
 	x.xxx_hidden_Qc = v
+}
+
+func (x *Block) SetId(v []byte) {
+	if v == nil {
+		v = []byte{}
+	}
+	x.xxx_hidden_Id = v
 }
 
 func (x *Block) HasQc() bool {
@@ -707,6 +724,7 @@ type Block_builder struct {
 	Round   uint64
 	Payload [][]byte
 	Qc      *QuorumCert
+	Id      []byte
 }
 
 func (b0 Block_builder) Build() *Block {
@@ -717,6 +735,7 @@ func (b0 Block_builder) Build() *Block {
 	x.xxx_hidden_Round = b.Round
 	x.xxx_hidden_Payload = b.Payload
 	x.xxx_hidden_Qc = b.Qc
+	x.xxx_hidden_Id = b.Id
 	return m0
 }
 
@@ -1305,12 +1324,13 @@ const file_proto_diempb_diem_proto_rawDesc = "" +
 	"\x03sig\x18\x02 \x01(\v2\x11.diempb.SignatureR\x03sig\"N\n" +
 	"\vTimeoutCert\x12\x14\n" +
 	"\x05round\x18\x01 \x01(\x04R\x05round\x12)\n" +
-	"\x05votes\x18\x02 \x03(\v2\x13.diempb.TimeoutVoteR\x05votes\"s\n" +
+	"\x05votes\x18\x02 \x03(\v2\x13.diempb.TimeoutVoteR\x05votes\"\x83\x01\n" +
 	"\x05Block\x12\x16\n" +
 	"\x06author\x18\x01 \x01(\rR\x06author\x12\x14\n" +
 	"\x05round\x18\x02 \x01(\x04R\x05round\x12\x18\n" +
 	"\apayload\x18\x03 \x03(\fR\apayload\x12\"\n" +
-	"\x02qc\x18\x04 \x01(\v2\x12.diempb.QuorumCertR\x02qc\"\xe2\x01\n" +
+	"\x02qc\x18\x04 \x01(\v2\x12.diempb.QuorumCertR\x02qc\x12\x0e\n" +
+	"\x02id\x18\x05 \x01(\fR\x02id\"\xe2\x01\n" +
 	"\vProposalMsg\x12#\n" +
 	"\x05block\x18\x01 \x01(\v2\r.diempb.BlockR\x05block\x127\n" +
 	"\rlast_round_tc\x18\x02 \x01(\v2\x13.diempb.TimeoutCertR\vlastRoundTc\x128\n" +

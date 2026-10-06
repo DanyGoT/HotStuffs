@@ -54,13 +54,16 @@ message TimeoutCert {
   repeated TimeoutVote votes = 2;
 }
 
-// No id field: the receiver recomputes it from the fields, so no digest is ever
-// taken from the wire.
+// id is a claim, like every digest on the wire: nothing trusts it until the
+// receiving edge has recomputed it from the other fields. It is carried only
+// because computing it hashes the whole payload, which the core must not repeat
+// for every use.
 message Block {
   uint32 author = 1;
   uint64 round = 2;
   repeated bytes payload = 3;
   QuorumCert qc = 4;
+  bytes id = 5;
 }
 
 message ProposalMsg {
