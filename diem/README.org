@@ -6,6 +6,10 @@ code.
 
 * The tree
 
+The package works directly on the generated =diempb= messages, which are
+read-only once built. Rounds are =uint64=, replica ids =uint32=, hashes
+32-byte slices.
+
 One file per module of the paper's section 3.
 
 #+begin_example
@@ -20,19 +24,19 @@ diem/
   verify.go        everything checked before a message is let into the loop
   events.go        the sealed event set and the bounded Queue
   loop.go          the event loop driver — Run, Tick, Step over the queue
-  types.go         ID, Hash, Signature, VoteInfo, LedgerCommitInfo, QC, Block,
-                   TC, and the messages
+  types.go         NewBlock and the small helpers over the diempb messages:
+                   QCRound, Commits, MaxHighQCRound, well-formedness
   seams.go         Transport, Crypto and Clock: what the core plugs into
   quorum.go        Faulty(n), QuorumSize(n), QuorumReached
-  hash.go          domain-separated digests
+  hash.go          domain-separated digests, over plain byte slices
   genesis.go       the fixed genesis block and its certificate
   sim_test.go      the deterministic multi-replica harness
   fakes_test.go    stand-in signer and hand-driven clock for the tests
 
-diemnet/           the wire layer; may import Gorums and protobuf
+diemnet/           the Gorums layer; may import Gorums and protobuf
   gorums.go        the Transport: outbound calls, bounded dropping send queue
-  wire.go          domain <-> protobuf conversion, both directions
-  server.go        inbound handlers; verifies at the edge, then enqueues
+  server.go        inbound handlers; verifies at the edge, then enqueues the
+                   received message as it is
 
 proto/diempb/
   diem.proto       the wire messages; protobuf only, no Gorums
@@ -68,7 +72,8 @@ plumbing around them.
 The rule is *authenticate at the edge, authorise by state in the loop.*
 
 Signatures, quorum sizes, certificate well-formedness and signer ordering are
-checked in =diemnet/server.go=, on the handler goroutine, and anything that
+checked by =Verifier=, called from =diemnet/server.go= on the handler
+goroutine, and anything that
 fails is dropped before it is queued. What stays in =Core= is what depends on
 this replica's current beliefs: whether the sender leads this round, and
 whether the message is too far ahead to buffer.
@@ -87,7 +92,9 @@ the rest being compromised.
 This package declares three, all in =seams.go=, and each has a real
 implementation and a test one: =Transport= (=diemnet= and the sim's in-memory
 network) is the hand-off out of the consensus goroutine, =Crypto= (=crypto= and
-=testSigner=) signs and verifies, and =Clock= (=SystemClock= and =fakeClock=)
+=testSigner=) signs and verifies digests as plain bytes, with the signer id as an
+argument — it knows nothing of the message types, and counting a quorum is
+=QuorumReached= in =diem=, and =Clock= (=SystemClock= and =fakeClock=)
 arms the round timer.
 
 The ledger, the mempool, the block tree and the backoff policy are concrete
@@ -123,8 +130,14 @@ proposal is enough to strand the replica.
 
 Certificate signature sets travel in strictly increasing signer order. A block
 id covers the signature slice byte for byte, so permuting it would change the
-id on the receiver and fork the chain; =diemnet/wire.go= preserves the order
-and =verify.go= rejects any certificate that arrives out of it.
+id on the receiver and fork the chain; =verify.go= rejects any certificate
+that arrives out of it.
+
+No digest from the wire is trusted until the edge has recomputed it. The
+=Verifier= requires every hash field to be exactly 32 bytes, and recomputes a
+proposal's block id once: the proposer stamps it in =Block.id= because hashing
+the payload is expensive, and after =VerifyProposal= the core reads =GetId()=
+instead of hashing again.
 
 * Running it
 
