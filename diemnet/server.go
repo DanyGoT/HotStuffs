@@ -5,6 +5,7 @@ import (
 
 	"github.com/DanyGoT/HotStuffs/diem"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/HotStuffs/proto/diemrpc"
 	"github.com/relab/gorums"
 )
 
@@ -31,7 +32,7 @@ type handler struct {
 	rejected atomic.Uint64
 }
 
-var _ diempb.DiemServer = (*handler)(nil)
+var _ diemrpc.DiemServer = (*handler)(nil)
 
 func (h *handler) Proposal(_ gorums.ServerContext, in *diempb.ProposalMsg) {
 	p, err := fromProposal(in)
