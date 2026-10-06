@@ -46,11 +46,11 @@ leader carry on without the missing round.
 The path from the network to the protocol and back is deliberately short:
 
 #+begin_example
-  gRPC/Gorums -> decode -> VERIFY -> queue -> Core.Step -> Transport -> out
+  gRPC/Gorums -> VERIFY -> queue -> Core.Step -> Transport -> out
                             |                    |
                   every signature checked   pure state machine:
                   here, on the handler      one goroutine, no locks,
-                  goroutine. Anything       no wire types
+                  goroutine. Anything       no network
                   that fails is dropped
                   and never reaches Core.
 #+end_example
@@ -90,11 +90,11 @@ the protobuf and needs =nix develop= for =protoc=.
 
 #+begin_example
 diem/           the protocol, one file per module of the paper's section 3
-diemnet/        the Gorums transport: outbound calls, inbound handlers, wire
-                conversion. The only package besides replica that sees Gorums
+diemnet/        the Gorums transport: outbound calls, inbound handlers.
+                The only package besides replica that sees Gorums
 proto/diempb/   the wire messages; protobuf only, *.pb.go is generated
 proto/diemrpc/  the Gorums service over those messages; *.pb.go is generated
-crypto/         ECDSA P-256 signer and PEM key files
+crypto/         ECDSA P-256 signing over plain bytes, and PEM key files
 replica/        wires Core + Loop + Transport and owns the lifecycle;
                 payload.go is the synthetic workload
 cmd/diem/       flags; a -local cluster or one -self/-remotes replica
@@ -108,9 +108,9 @@ the code.
 
 =make check-deps= enforces five things:
 
-1. =diem= imports nothing outside the standard library.
-2. =diem= and =crypto= may not import =diempb= or =relab/gorums=. Gorums
-   stays behind the =Transport= seam.
+1. =diem= imports the standard library, protobuf and =diempb= only — never
+   Gorums, gRPC or =diemrpc=. Gorums stays behind the =Transport= seam.
+2. =crypto= imports the standard library only.
 3. =diempb= depends on protobuf alone, never on Gorums or gRPC; the service
    lives in =diemrpc=.
 4. =diem= contains no =go= statement — the protocol core does not spawn
@@ -118,7 +118,7 @@ the code.
 5. No package uses =reflect=.
 
 The practical effect is that the whole protocol runs in the deterministic
-harness in =diem/sim_test.go=, with no network and no wire format in sight.
+harness in =diem/sim_test.go=, with no network in sight.
 
 * Reading Materials / Related Work
 
