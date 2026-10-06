@@ -1,5 +1,5 @@
 GO_DIRS := diem crypto diemnet replica cmd
-PROTO   := proto/diempb/diem.proto
+PROTO   := proto/diempb/diem.proto proto/diemrpc/diem.proto
 BIN     := $(CURDIR)/bin
 PLUGINS := $(BIN)/protoc-gen-go $(BIN)/protoc-gen-gorums
 
@@ -33,6 +33,7 @@ check-deps:
 	@# a dot in the first path element means a domain, i.e. not stdlib
 	@! go list -f '{{join .Deps "\n"}}' ./diem | grep -q '^[^/]*\.'
 	@! grep -rq --include='*.go' 'diempb\|relab/gorums' diem crypto
+	@! go list -deps ./proto/diempb | grep -q 'relab/gorums\|google.golang.org/grpc'
 	@! grep -rEq --include='*.go' '^[[:space:]]*go ' diem
 	@! grep -rq --include='*.go' 'reflect\.' $(GO_DIRS)
 	@echo "check-deps: ok"

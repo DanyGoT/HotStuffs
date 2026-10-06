@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/DanyGoT/HotStuffs/diem"
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/HotStuffs/proto/diemrpc"
 	"github.com/relab/gorums"
 )
 
@@ -102,7 +102,7 @@ func New(cfg Config) *Transport {
 	// unsynchronised map that the inbound manager reads once serving starts, so
 	// gorumstest.LocalServers — which serves before it returns — cannot be used
 	// for a replica group; -race flags it.
-	diempb.RegisterDiemServer(srv, h)
+	diemrpc.RegisterDiemServer(srv, h)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Transport{
@@ -148,7 +148,7 @@ func (t *Transport) WaitForPeers(ctx context.Context) error {
 
 func (t *Transport) Proposal(p *diem.ProposalMsg) {
 	msg := toProposal(p)
-	t.enqueue(func(cfg gorums.Config) { _ = diempb.Proposal(cfg.Context(t.ctx), msg).Send() })
+	t.enqueue(func(cfg gorums.Config) { _ = diemrpc.Proposal(cfg.Context(t.ctx), msg).Send() })
 }
 
 // Vote unicasts to the leader of the next round, as the paper does: that leader
@@ -161,13 +161,13 @@ func (t *Transport) Vote(v *diem.VoteMsg, to diem.ID) {
 			t.dropped.Add(1)
 			return
 		}
-		_ = diempb.Vote(node.Context(t.ctx), msg).Send()
+		_ = diemrpc.Vote(node.Context(t.ctx), msg).Send()
 	})
 }
 
 func (t *Transport) Timeout(m *diem.TimeoutMsg) {
 	msg := toTimeout(m)
-	t.enqueue(func(cfg gorums.Config) { _ = diempb.Timeout(cfg.Context(t.ctx), msg).Send() })
+	t.enqueue(func(cfg gorums.Config) { _ = diemrpc.Timeout(cfg.Context(t.ctx), msg).Send() })
 }
 
 // node resolves a replica ID to the Gorums node to unicast to, indexing the
