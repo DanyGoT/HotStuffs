@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-
-	"github.com/DanyGoT/HotStuffs/diem"
 )
 
 // Key material is distributed out of band, as PEM files in one directory:
@@ -18,7 +16,7 @@ import (
 // story, and the report says so.
 
 // WriteKeys writes every replica's key pair into dir as PEM.
-func WriteKeys(dir string, privs map[diem.ID]*ecdsa.PrivateKey) error {
+func WriteKeys(dir string, privs map[uint32]*ecdsa.PrivateKey) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -43,7 +41,7 @@ func WriteKeys(dir string, privs map[diem.ID]*ecdsa.PrivateKey) error {
 
 // ReadKeys reads replica id's private key and every replica's public key from
 // dir. The public keys found there define the replica set, and so the quorum.
-func ReadKeys(dir string, id diem.ID) (*ecdsa.PrivateKey, map[diem.ID]*ecdsa.PublicKey, error) {
+func ReadKeys(dir string, id uint32) (*ecdsa.PrivateKey, map[uint32]*ecdsa.PublicKey, error) {
 	der, err := readPEM(filepath.Join(dir, fmt.Sprintf("%d.key", id)), "EC PRIVATE KEY")
 	if err != nil {
 		return nil, nil, err
@@ -57,7 +55,7 @@ func ReadKeys(dir string, id diem.ID) (*ecdsa.PrivateKey, map[diem.ID]*ecdsa.Pub
 	if err != nil {
 		return nil, nil, err
 	}
-	pubs := make(map[diem.ID]*ecdsa.PublicKey, len(names))
+	pubs := make(map[uint32]*ecdsa.PublicKey, len(names))
 	for _, name := range names {
 		base := filepath.Base(name)
 		n, err := strconv.ParseUint(base[:len(base)-len(".pub")], 10, 32)
@@ -76,7 +74,7 @@ func ReadKeys(dir string, id diem.ID) (*ecdsa.PrivateKey, map[diem.ID]*ecdsa.Pub
 		if !ok {
 			return nil, nil, fmt.Errorf("%s: not an ECDSA public key", base)
 		}
-		pubs[diem.ID(n)] = pub
+		pubs[uint32(n)] = pub
 	}
 	// The public keys found here define the replica set, and so the quorum
 	// and the leader rotation. They must therefore be exactly 1..n: a stale
@@ -85,7 +83,7 @@ func ReadKeys(dir string, id diem.ID) (*ecdsa.PrivateKey, map[diem.ID]*ecdsa.Pub
 	if len(pubs) == 0 {
 		return nil, nil, fmt.Errorf("no public keys in %s", dir)
 	}
-	for i := diem.ID(1); int(i) <= len(pubs); i++ {
+	for i := uint32(1); int(i) <= len(pubs); i++ {
 		if pubs[i] == nil {
 			return nil, nil, fmt.Errorf("%s holds %d public keys but not %d.pub: they must be 1..%d", dir, len(pubs), i, len(pubs))
 		}

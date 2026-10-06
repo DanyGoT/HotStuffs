@@ -1,5 +1,7 @@
 package diem
 
+import "github.com/DanyGoT/HotStuffs/proto/diempb"
+
 // Safety is the paper's Safety module (3.4): the core consensus safety rules
 // and the only holder of the private key.
 //
@@ -8,59 +10,59 @@ package diem
 // be deployed inside a trusted hardware component. Everything else it needs
 // arrives as an argument or comes from the ledger.
 type Safety struct {
-	id     ID
+	id     uint32
 	verify *Verifier
 	crypto Crypto
 	ledger *MemLedger
 	tree   *BlockTree
 
-	highestVoteRound Round
-	highestQCRound   Round
+	highestVoteRound uint64
+	highestQCRound   uint64
 
 	declinedMissingAncestor uint64
 }
 
 // NewSafety returns the safety module for replica id. It re-verifies through
 // verify rather than trusting what the edge already checked.
-func NewSafety(id ID, verify *Verifier, crypto Crypto, ledger *MemLedger, tree *BlockTree) *Safety {
+func NewSafety(id uint32, verify *Verifier, crypto Crypto, ledger *MemLedger, tree *BlockTree) *Safety {
 	return &Safety{id: id, verify: verify, crypto: crypto, ledger: ledger, tree: tree}
 }
 
 // HighestVoteRound is the last round this replica voted or timed out in.
-func (s *Safety) HighestVoteRound() Round { return s.highestVoteRound }
+func (s *Safety) HighestVoteRound() uint64 { return s.highestVoteRound }
 
 // HighestQCRound is the highest certified round this replica has endorsed by
 // voting over it.
-func (s *Safety) HighestQCRound() Round { return s.highestQCRound }
+func (s *Safety) HighestQCRound() uint64 { return s.highestQCRound }
 
 // DeclinedMissingAncestor counts the votes withheld because the block's
 // ancestry was never speculated. It is monotonic, and it is the only measure of
 // what having no block-sync costs: see MemLedger.Speculate.
 func (s *Safety) DeclinedMissingAncestor() uint64 { return s.declinedMissingAncestor }
 
-func (s *Safety) increaseHighestVoteRound(round Round) {
+func (s *Safety) increaseHighestVoteRound(round uint64) {
 	s.highestVoteRound = max(round, s.highestVoteRound)
 }
 
-func (s *Safety) updateHighestQCRound(qcRound Round) {
+func (s *Safety) updateHighestQCRound(qcRound uint64) {
 	s.highestQCRound = max(qcRound, s.highestQCRound)
 }
 
-func consecutive(blockRound, round Round) bool { return round+1 == blockRound }
+func consecutive(blockRound, round uint64) bool { return round+1 == blockRound }
 
 // safeToExtend allows a block that skips rounds, but only behind a TC for the
 // round directly below it, and only when its certificate is at least as high
 // as every certificate that TC's quorum reported. That second half is what
 // stops a new leader from forking below something already committed: the
 // quorum has vouched that nothing above MaxHighQCRound was certified by them.
-func (s *Safety) safeToExtend(blockRound, qcRound Round, tc *TC) bool {
+func (s *Safety) safeToExtend(blockRound, qcRound uint64, tc *diempb.TimeoutCert) bool {
 	if tc == nil {
 		return false
 	}
-	return consecutive(blockRound, tc.Round) && qcRound >= tc.MaxHighQCRound()
+	return consecutive(blockRound, tc.GetRound()) && qcRound >= MaxHighQCRound(tc)
 }
 
-func (s *Safety) safeToVote(blockRound, qcRound Round, tc *TC) bool {
+func (s *Safety) safeToVote(blockRound, qcRound uint64, tc *diempb.TimeoutCert) bool {
 	// 1. vote in monotonically increasing rounds
 	// 2. a block must extend a round below its own
 	if blockRound <= max(s.highestVoteRound, qcRound) {
@@ -74,42 +76,42 @@ func (s *Safety) safeToVote(blockRound, qcRound Round, tc *TC) bool {
 // safeToTimeout refuses to abandon a round whose entry was never justified,
 // and refuses to report a high_qc below one already endorsed — that report is
 // what a later leader's safeToExtend check trusts.
-func (s *Safety) safeToTimeout(round, qcRound Round, tc *TC) bool {
+func (s *Safety) safeToTimeout(round, qcRound uint64, tc *diempb.TimeoutCert) bool {
 	if qcRound < s.highestQCRound {
 		return false
 	}
 	// The paper writes max(highest_vote_round - 1, qc_round); rounds are
 	// unsigned, so round 0 is subtracted explicitly rather than wrapping.
-	var voted Round
+	var voted uint64
 	if s.highestVoteRound > 0 {
 		voted = s.highestVoteRound - 1
 	}
 	if round <= max(voted, qcRound) {
 		return false
 	}
-	return consecutive(round, qcRound) || (tc != nil && consecutive(round, tc.Round))
+	return consecutive(round, qcRound) || (tc != nil && consecutive(round, tc.GetRound()))
 }
 
 // commitStateIDCandidate is the 2-chain commit rule. A vote for a block whose
 // round directly follows its parent's carries the parent's speculated state,
 // so the quorum that certifies this block also certifies that commit. A gap in
 // rounds commits nothing, which is the zero hash.
-func (s *Safety) commitStateIDCandidate(blockRound Round, qc *QC) Hash {
-	if !consecutive(blockRound, qc.Round()) {
-		return Hash{}
+func (s *Safety) commitStateIDCandidate(blockRound uint64, qc *diempb.QuorumCert) []byte {
+	if !consecutive(blockRound, QCRound(qc)) {
+		return zeroHash[:]
 	}
-	state, ok := s.ledger.PendingState(qc.VoteInfo.ID)
+	state, ok := s.ledger.PendingState(qc.GetVoteInfo().GetId())
 	if !ok {
-		return Hash{}
+		return zeroHash[:]
 	}
 	return state
 }
 
 // MakeVote returns this replica's vote for b, or nil if the safety rules
 // refuse it. The counters move only on the path that produces a vote.
-func (s *Safety) MakeVote(b *Block, lastTC *TC) *VoteMsg {
-	qcRound := b.QC.Round()
-	if !s.validSignatures(b.QC, lastTC) || !s.safeToVote(b.Round, qcRound, lastTC) {
+func (s *Safety) MakeVote(b *diempb.Block, lastTC *diempb.TimeoutCert) *diempb.VoteMsg {
+	qcRound := QCRound(b.GetQc())
+	if !s.validSignatures(b.GetQc(), lastTC) || !s.safeToVote(b.GetRound(), qcRound, lastTC) {
 		return nil
 	}
 	// The paper puts this lookup inside the vote and would sign a bottom
@@ -117,58 +119,58 @@ func (s *Safety) MakeVote(b *Block, lastTC *TC) *VoteMsg {
 	// about an execution result, and a replica that could not execute the
 	// block — because it never saw an ancestor, and the paper has no
 	// block-sync — has no result to claim.
-	exec, ok := s.ledger.PendingState(b.ID())
+	exec, ok := s.ledger.PendingState(b.GetId())
 	if !ok {
 		s.declinedMissingAncestor++
 		return nil
 	}
 
-	s.updateHighestQCRound(qcRound)     // protect the round we are endorsing
-	s.increaseHighestVoteRound(b.Round) // never vote in this round again
+	s.updateHighestQCRound(qcRound)          // protect the round we are endorsing
+	s.increaseHighestVoteRound(b.GetRound()) // never vote in this round again
 
-	voteInfo := VoteInfo{
-		ID:          b.ID(),
-		Round:       b.Round,
-		ParentID:    b.QC.VoteInfo.ID,
+	voteInfo := diempb.VoteInfo_builder{
+		Id:          b.GetId(),
+		Round:       b.GetRound(),
+		ParentId:    parentID(b),
 		ParentRound: qcRound,
-		ExecStateID: exec,
-	}
-	commit := LedgerCommitInfo{
-		CommitStateID: s.commitStateIDCandidate(b.Round, b.QC),
+		ExecStateId: exec,
+	}.Build()
+	commit := diempb.LedgerCommitInfo_builder{
+		CommitStateId: s.commitStateIDCandidate(b.GetRound(), b.GetQc()),
 		VoteInfoHash:  VoteInfoHash(voteInfo),
-	}
-	sig, err := s.crypto.Sign(LedgerCommitDigest(commit))
+	}.Build()
+	sig, err := sign(s.crypto, s.id, LedgerCommitDigest(commit))
 	if err != nil {
 		return nil
 	}
-	return &VoteMsg{
+	return diempb.VoteMsg_builder{
 		VoteInfo:         voteInfo,
 		LedgerCommitInfo: commit,
-		HighCommitQC:     s.tree.HighCommitQC(),
+		HighCommitQc:     s.tree.HighCommitQC(),
 		Sender:           s.id,
 		Sig:              sig,
-	}
+	}.Build()
 }
 
 // MakeTimeout returns this replica's timeout for round, or nil if the safety
 // rules refuse it. Timing out burns the round for voting too: the counter is
 // raised before the message goes out.
-func (s *Safety) MakeTimeout(round Round, highQC *QC, lastTC *TC) *TimeoutInfo {
-	qcRound := highQC.Round()
+func (s *Safety) MakeTimeout(round uint64, highQC *diempb.QuorumCert, lastTC *diempb.TimeoutCert) *diempb.TimeoutInfo {
+	qcRound := QCRound(highQC)
 	if !s.validSignatures(highQC, lastTC) || !s.safeToTimeout(round, qcRound, lastTC) {
 		return nil
 	}
 	s.increaseHighestVoteRound(round)
-	sig, err := s.crypto.Sign(TimeoutDigest(round, qcRound))
+	sig, err := sign(s.crypto, s.id, TimeoutDigest(round, qcRound))
 	if err != nil {
 		return nil
 	}
-	return &TimeoutInfo{Round: round, HighQC: highQC, Sender: s.id, Sig: sig}
+	return diempb.TimeoutInfo_builder{Round: round, HighQc: highQC, Sender: s.id, Sig: sig}.Build()
 }
 
 // validSignatures re-checks everything a vote will be built over. The rest of
 // the replica has checked it already; Safety checks again because it is the
 // one component assumed to survive the rest being compromised.
-func (s *Safety) validSignatures(qc *QC, tc *TC) bool {
+func (s *Safety) validSignatures(qc *diempb.QuorumCert, tc *diempb.TimeoutCert) bool {
 	return s.verify.VerifyQC(qc) && s.verify.VerifyTC(tc)
 }

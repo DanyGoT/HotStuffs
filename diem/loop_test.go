@@ -15,9 +15,9 @@ func newLoopFixture(t *testing.T, observe func(Event, State, time.Duration)) (*L
 	net := &recordNet{}
 	core := New(Config{
 		ID:         1,
-		Validators: []ID{1, 2, 3, 4},
+		Validators: []uint32{1, 2, 3, 4},
 		Ledger:     NewMemLedger(),
-		Crypto:     newTestSigner(1, testN),
+		Crypto:     newTestSigner(testN),
 		Transport:  net,
 		Clock:      newFakeClock(),
 		Backoff:    NewBackoff(100*time.Millisecond, time.Second, 2),

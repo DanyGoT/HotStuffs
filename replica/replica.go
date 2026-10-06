@@ -14,6 +14,7 @@ import (
 	"github.com/DanyGoT/HotStuffs/crypto"
 	"github.com/DanyGoT/HotStuffs/diem"
 	"github.com/DanyGoT/HotStuffs/diemnet"
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/relab/gorums"
 )
 
@@ -25,12 +26,12 @@ const (
 
 // Config is everything a replica needs.
 type Config struct {
-	ID     diem.ID
+	ID     uint32
 	Peers  map[uint32]string // every replica's address, this one included
 	Listen string            // ":0" picks a free port; read it back with Addr
 
 	Key  *ecdsa.PrivateKey
-	Keys map[diem.ID]*ecdsa.PublicKey
+	Keys map[uint32]*ecdsa.PublicKey
 
 	// Transactions supplies a leader's payload; nil proposes empty blocks.
 	Transactions func() [][]byte
@@ -48,7 +49,7 @@ type Config struct {
 // Replica is one DiemBFT replica: a protocol core, its event loop, and the
 // Gorums transport underneath.
 type Replica struct {
-	id   diem.ID
+	id   uint32
 	core *diem.Core
 	loop *diem.Loop
 	net  *diemnet.Transport
@@ -58,13 +59,13 @@ type Replica struct {
 	// goroutine and callers read from their own. It guards application state,
 	// never protocol state.
 	mu        sync.Mutex
-	commits   []*diem.Block
+	commits   []*diempb.Block
 	latencies []time.Duration
 	commands  uint64
 
 	// proposed is when this replica sent its proposal for each round it led and
 	// has not yet seen committed. Only the consensus goroutine touches it.
-	proposed map[diem.Round]time.Time
+	proposed map[uint64]time.Time
 
 	// declined mirrors diem.State.DeclinedMissingAncestor out of the loop
 	// goroutine, which is the only way to read it: the core's state is not
@@ -95,10 +96,10 @@ func New(cfg Config) *Replica {
 	}
 
 	validators := slices.Sorted(maps.Keys(cfg.Keys))
-	signer := crypto.New(cfg.ID, cfg.Key, cfg.Keys)
+	signer := crypto.New(cfg.Key, cfg.Keys)
 	q := diem.NewQueue(cfg.QueueSize)
 
-	r := &Replica{id: cfg.ID, q: q, proposed: map[diem.Round]time.Time{}}
+	r := &Replica{id: cfg.ID, q: q, proposed: map[uint64]time.Time{}}
 	ledger := diem.NewMemLedger()
 	ledger.OnCommit = r.commit
 
@@ -132,30 +133,30 @@ func New(cfg Config) *Replica {
 // stamper records when this replica sends each of its proposals.
 type stamper struct {
 	*diemnet.Transport
-	proposed map[diem.Round]time.Time
+	proposed map[uint64]time.Time
 }
 
-func (s stamper) Proposal(p *diem.ProposalMsg) {
-	s.proposed[p.Block.Round] = time.Now()
+func (s stamper) Proposal(p *diempb.ProposalMsg) {
+	s.proposed[p.GetBlock().GetRound()] = time.Now()
 	s.Transport.Proposal(p)
 }
 
 // commit appends b to the log and, for a block this replica proposed, records
 // its propose-to-commit latency. Rounds at or below b's can no longer commit
 // a block of this replica's, so their stamps go too.
-func (r *Replica) commit(b *diem.Block) {
+func (r *Replica) commit(b *diempb.Block) {
 	var lat time.Duration
-	if t, ok := r.proposed[b.Round]; ok && b.Author == r.id {
+	if t, ok := r.proposed[b.GetRound()]; ok && b.GetAuthor() == r.id {
 		lat = time.Since(t)
 		for round := range r.proposed {
-			if round <= b.Round {
+			if round <= b.GetRound() {
 				delete(r.proposed, round)
 			}
 		}
 	}
 	r.mu.Lock()
 	r.commits = append(r.commits, b)
-	r.commands += uint64(len(b.Payload))
+	r.commands += uint64(len(b.GetPayload()))
 	if lat > 0 {
 		r.latencies = append(r.latencies, lat)
 	}
@@ -207,7 +208,7 @@ func (r *Replica) stop() {
 }
 
 // ID is this replica's identity.
-func (r *Replica) ID() diem.ID { return r.id }
+func (r *Replica) ID() uint32 { return r.id }
 
 // Addr is the address the transport listens on.
 func (r *Replica) Addr() string { return r.net.Addr() }
@@ -215,10 +216,10 @@ func (r *Replica) Addr() string { return r.net.Addr() }
 // Log is the committed blocks, in commit order. It is safe to call from any
 // goroutine; the core's own state deliberately is not exposed, since it belongs
 // to the loop goroutine alone.
-func (r *Replica) Log() []*diem.Block {
+func (r *Replica) Log() []*diempb.Block {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]*diem.Block(nil), r.commits...)
+	return append([]*diempb.Block(nil), r.commits...)
 }
 
 // Latencies is the propose-to-commit latency of each committed block this

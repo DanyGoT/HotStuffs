@@ -1,3 +1,8 @@
+// Package diemnet is the Gorums transport for DiemBFT. Two files here see the
+// Gorums and gRPC layer, and nothing else below them does: server.go
+// implements the generated server interface and gorums.go calls the generated
+// client functions. The messages cross it as generated diempb types, which
+// package diem consumes directly; check-deps keeps Gorums out of diem.
 package diemnet
 
 import (
@@ -6,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/DanyGoT/HotStuffs/diem"
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/DanyGoT/HotStuffs/proto/diemrpc"
 	"github.com/relab/gorums"
 )
@@ -14,7 +20,7 @@ const defaultOutQueue = 1024
 
 // Config is what the transport and its inbound handlers need.
 type Config struct {
-	ID       diem.ID
+	ID       uint32
 	Peers    map[uint32]string // every replica's address, this one included
 	Listen   string            // ":0" picks a free port; read it back with Addr
 	Sink     func(diem.Event)  // where verified inbound events go
@@ -146,28 +152,25 @@ func (t *Transport) WaitForPeers(ctx context.Context) error {
 	return t.srv.WaitForPeers(ctx, func(c gorums.Config) bool { return c.Size() >= want })
 }
 
-func (t *Transport) Proposal(p *diem.ProposalMsg) {
-	msg := toProposal(p)
-	t.enqueue(func(cfg gorums.Config) { _ = diemrpc.Proposal(cfg.Context(t.ctx), msg).Send() })
+func (t *Transport) Proposal(p *diempb.ProposalMsg) {
+	t.enqueue(func(cfg gorums.Config) { _ = diemrpc.Proposal(cfg.Context(t.ctx), p).Send() })
 }
 
 // Vote unicasts to the leader of the next round, as the paper does: that leader
 // is the only replica that will propose over the certificate these votes form.
-func (t *Transport) Vote(v *diem.VoteMsg, to diem.ID) {
-	msg := toVote(v)
+func (t *Transport) Vote(v *diempb.VoteMsg, to uint32) {
 	t.enqueue(func(cfg gorums.Config) {
-		node := t.node(cfg, uint32(to))
+		node := t.node(cfg, to)
 		if node == nil {
 			t.dropped.Add(1)
 			return
 		}
-		_ = diemrpc.Vote(node.Context(t.ctx), msg).Send()
+		_ = diemrpc.Vote(node.Context(t.ctx), v).Send()
 	})
 }
 
-func (t *Transport) Timeout(m *diem.TimeoutMsg) {
-	msg := toTimeout(m)
-	t.enqueue(func(cfg gorums.Config) { _ = diemrpc.Timeout(cfg.Context(t.ctx), msg).Send() })
+func (t *Transport) Timeout(m *diempb.TimeoutMsg) {
+	t.enqueue(func(cfg gorums.Config) { _ = diemrpc.Timeout(cfg.Context(t.ctx), m).Send() })
 }
 
 // node resolves a replica ID to the Gorums node to unicast to, indexing the

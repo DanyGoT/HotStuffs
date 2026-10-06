@@ -3,6 +3,8 @@ package diem
 import (
 	"testing"
 	"time"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 )
 
 // The tests here cover what Core decides from protocol state — which round it
@@ -21,13 +23,13 @@ type coreFixture struct {
 func newCoreFixture(t *testing.T) *coreFixture {
 	t.Helper()
 	f := &coreFixture{net: &recordNet{}, events: new([]Event)}
-	ids := []ID{1, 2, 3, 4}
+	ids := []uint32{1, 2, 3, 4}
 	f.core = New(Config{
 		ID:           2,
 		Validators:   ids,
 		Ledger:       NewMemLedger(),
 		Transactions: NewFIFOPool(16, 2).GetTransactions,
-		Crypto:       newTestSigner(2, testN),
+		Crypto:       newTestSigner(testN),
 		Transport:    f.net,
 		Clock:        newFakeClock(),
 		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
@@ -44,14 +46,14 @@ func newCoreFixture(t *testing.T) *coreFixture {
 }
 
 // proposal is a well-formed round-1 proposal from replica 1 over genesis.
-func proposal(from ID, author ID, round Round) *ProposalMsg {
+func proposal(from uint32, author uint32, round uint64) *diempb.ProposalMsg {
 	b := NewBlock(author, round, [][]byte{{0xaa}}, genesisQC)
-	return &ProposalMsg{
+	return diempb.ProposalMsg_builder{
 		Block:        b,
-		HighCommitQC: genesisQC,
+		HighCommitQc: genesisQC,
 		Sender:       from,
-		Sig:          signAs(from, b.ID()),
-	}
+		Sig:          signAs(from, b.GetId()),
+	}.Build()
 }
 
 func TestCoreVotesForValidProposal(t *testing.T) {
@@ -74,16 +76,16 @@ func TestCoreVotesForValidProposal(t *testing.T) {
 func TestCoreRejectsProposals(t *testing.T) {
 	tests := []struct {
 		name string
-		msg  func() *ProposalMsg
+		msg  func() *diempb.ProposalMsg
 	}{
-		{"sender is not the round's leader", func() *ProposalMsg {
+		{"sender is not the round's leader", func() *diempb.ProposalMsg {
 			return proposal(3, 3, 1)
 		}},
-		{"sender and author disagree", func() *ProposalMsg {
+		{"sender and author disagree", func() *diempb.ProposalMsg {
 			p := proposal(3, 1, 1)
 			return p
 		}},
-		{"round is not the round this replica is in", func() *ProposalMsg {
+		{"round is not the round this replica is in", func() *diempb.ProposalMsg {
 			return proposal(1, 1, 7)
 		}},
 	}
@@ -100,15 +102,15 @@ func TestCoreRejectsProposals(t *testing.T) {
 
 // voteFor builds replica from's honest vote for b, by running a real Safety
 // over a ledger that has speculated the block.
-func voteFor(t *testing.T, from ID, b *Block) *VoteMsg {
+func voteFor(t *testing.T, from uint32, b *diempb.Block) *diempb.VoteMsg {
 	t.Helper()
 	ledger := NewMemLedger()
 	ledger.Speculate(b)
-	signer := newTestSigner(from, testN)
+	signer := newTestSigner(testN)
 	tree := NewBlockTree(from, testQuorum, ledger, signer)
 	v := NewSafety(from, NewVerifier(signer, testQuorum), signer, ledger, tree).MakeVote(b, nil)
 	if v == nil {
-		t.Fatalf("replica %d refused to vote for round %d", from, b.Round)
+		t.Fatalf("replica %d refused to vote for round %d", from, b.GetRound())
 	}
 	return v
 }
@@ -120,8 +122,8 @@ func TestCoreFormsQCFromQuorum(t *testing.T) {
 	p := proposal(1, 1, 1)
 	f.core.Step(ProposalEvent{Msg: p})
 
-	for _, from := range []ID{1, 3, 4} {
-		f.core.Step(VoteEvent{Msg: voteFor(t, from, p.Block)})
+	for _, from := range []uint32{1, 3, 4} {
+		f.core.Step(VoteEvent{Msg: voteFor(t, from, p.GetBlock())})
 	}
 	if got := f.core.State().Round; got != 2 {
 		t.Fatalf("round %d after a quorum of votes, want 2", got)
@@ -132,23 +134,23 @@ func TestCoreFormsQCFromQuorum(t *testing.T) {
 }
 
 // timeoutFrom builds replica from's honest timeout for round 1 over genesis.
-func timeoutFrom(t *testing.T, from ID) *TimeoutMsg {
+func timeoutFrom(t *testing.T, from uint32) *diempb.TimeoutMsg {
 	t.Helper()
 	ledger := NewMemLedger()
-	signer := newTestSigner(from, testN)
+	signer := newTestSigner(testN)
 	tree := NewBlockTree(from, testQuorum, ledger, signer)
 	info := NewSafety(from, NewVerifier(signer, testQuorum), signer, ledger, tree).MakeTimeout(1, genesisQC, nil)
 	if info == nil {
 		t.Fatalf("replica %d refused to time out round 1", from)
 	}
-	return &TimeoutMsg{TmoInfo: *info, HighCommitQC: genesisQC}
+	return diempb.TimeoutMsg_builder{TmoInfo: info, HighCommitQc: genesisQC}.Build()
 }
 
 // TestCoreAmplifiesTimeouts is the control: f+1 honest timeouts make this
 // replica give up on the round too.
 func TestCoreAmplifiesTimeouts(t *testing.T) {
 	f := newCoreFixture(t)
-	for _, from := range []ID{1, 3} { // f+1 = 2 distinct senders
+	for _, from := range []uint32{1, 3} { // f+1 = 2 distinct senders
 		f.core.Step(TimeoutEvent{Msg: timeoutFrom(t, from)})
 	}
 	if len(f.net.timeouts) != 1 {
@@ -176,10 +178,10 @@ func TestCoreStopDisarmsTimer(t *testing.T) {
 	var events []Event
 	core := New(Config{
 		ID:           1,
-		Validators:   []ID{1, 2, 3, 4},
+		Validators:   []uint32{1, 2, 3, 4},
 		Ledger:       NewMemLedger(),
 		Transactions: NewFIFOPool(16, 2).GetTransactions,
-		Crypto:       newTestSigner(1, testN),
+		Crypto:       newTestSigner(testN),
 		Transport:    &recordNet{},
 		Clock:        clock,
 		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
@@ -210,15 +212,15 @@ func TestQueueDeliversEvents(t *testing.T) {
 // arbitrary VoteInfo, its hash bound into a LedgerCommitInfo, and its own valid
 // signature over that pair. Nothing in the message ties the round it claims to
 // anything else.
-func fabricatedVote(from ID, round Round) *VoteMsg {
-	voteInfo := VoteInfo{ID: Hash{byte(round), byte(round >> 8)}, Round: round}
-	commit := LedgerCommitInfo{VoteInfoHash: VoteInfoHash(voteInfo)}
-	return &VoteMsg{
-		VoteInfo:         voteInfo,
+func fabricatedVote(from uint32, round uint64) *diempb.VoteMsg {
+	vi := voteInfo(hashOf(byte(round), byte(round>>8)), round, nil, 0)
+	commit := commitInfo(nil, vi)
+	return diempb.VoteMsg_builder{
+		VoteInfo:         vi,
 		LedgerCommitInfo: commit,
 		Sender:           from,
 		Sig:              signAs(from, LedgerCommitDigest(commit)),
-	}
+	}.Build()
 }
 
 // TestCoreBoundsVoteAccumulation is the accumulator bound. BlockTree.votes is
@@ -230,7 +232,7 @@ func TestCoreBoundsVoteAccumulation(t *testing.T) {
 	v := newTestVerifier()
 
 	const votes = 10000
-	for r := Round(1); r <= votes; r++ {
+	for r := uint64(1); r <= votes; r++ {
 		m := fabricatedVote(1, r)
 		if !v.VerifyVote(m) {
 			t.Fatalf("setup: the fabricated vote for round %d must pass the edge", r)

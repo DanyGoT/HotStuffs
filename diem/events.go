@@ -1,5 +1,7 @@
 package diem
 
+import "github.com/DanyGoT/HotStuffs/proto/diempb"
+
 // Event is a protocol event. The set is closed: the unexported method means no
 // other package can add a member, so the dispatch switch in Core is exhaustive
 // by construction and needs no default case. It is the paper's
@@ -8,17 +10,17 @@ type Event interface{ event() }
 
 // ProposalEvent is an authenticated proposal from another replica, or from
 // this one through the transport's local node.
-type ProposalEvent struct{ Msg *ProposalMsg }
+type ProposalEvent struct{ Msg *diempb.ProposalMsg }
 
 // VoteEvent is an authenticated vote addressed to this replica as the next
 // round's leader.
-type VoteEvent struct{ Msg *VoteMsg }
+type VoteEvent struct{ Msg *diempb.VoteMsg }
 
 // TimeoutEvent is an authenticated timeout from another replica.
-type TimeoutEvent struct{ Msg *TimeoutMsg }
+type TimeoutEvent struct{ Msg *diempb.TimeoutMsg }
 
 // LocalTimeoutEvent is this replica's own round timer firing.
-type LocalTimeoutEvent struct{ Round Round }
+type LocalTimeoutEvent struct{ Round uint64 }
 
 func (ProposalEvent) event()     {}
 func (VoteEvent) event()         {}

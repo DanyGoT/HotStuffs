@@ -8,27 +8,18 @@ import (
 // testSigner is a stand-in for real crypto: a signature is the signed digest
 // itself, so a wrong-digest bug still fails, but there is no key material and
 // no randomness.
-type testSigner struct {
-	id ID
-	n  int
-}
+type testSigner struct{ n int }
 
-func newTestSigner(id ID, n int) *testSigner { return &testSigner{id: id, n: n} }
+func newTestSigner(n int) *testSigner { return &testSigner{n: n} }
 
-func (s *testSigner) Sign(msg Hash) (Signature, error) {
-	return Signature{Signer: s.id, Data: bytes.Clone(msg[:])}, nil
-}
+func (s *testSigner) Sign(digest []byte) ([]byte, error) { return bytes.Clone(digest), nil }
 
-// Verify checks that sig names a replica in 1..n and carries msg itself.
-func (s *testSigner) Verify(msg Hash, sig Signature) bool {
-	if sig.Signer < 1 || uint64(sig.Signer) > uint64(s.n) {
+// Verify checks that signer is a replica in 1..n and sig carries digest itself.
+func (s *testSigner) Verify(signer uint32, digest, sig []byte) bool {
+	if signer < 1 || uint64(signer) > uint64(s.n) {
 		return false
 	}
-	return bytes.Equal(sig.Data, msg[:])
-}
-
-func (s *testSigner) VerifyQuorum(msg Hash, sigs []Signature) bool {
-	return QuorumReached(s.n, msg, sigs, s.Verify)
+	return bytes.Equal(sig, digest)
 }
 
 // fakeClock is a clock driven by hand: timers fire only from Advance, in

@@ -1,6 +1,7 @@
 package replica
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/DanyGoT/HotStuffs/crypto"
 	"github.com/DanyGoT/HotStuffs/diem"
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/relab/gorums"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -54,7 +56,7 @@ func cluster(t *testing.T, n int, round time.Duration) ([]*Replica, func(context
 
 	reps := make([]*Replica, n)
 	for i := range n {
-		id := diem.ID(i + 1)
+		id := uint32(i + 1)
 		reps[i] = New(Config{
 			ID:           id,
 			Key:          privs[id],
@@ -78,6 +80,8 @@ func cluster(t *testing.T, n int, round time.Duration) ([]*Replica, func(context
 	}
 	return reps, run
 }
+
+func parentID(b *diempb.Block) []byte { return b.GetQc().GetVoteInfo().GetId() }
 
 func depths(reps []*Replica) []int {
 	d := make([]int, len(reps))
@@ -113,30 +117,30 @@ func TestClusterCommitsIdenticalPrefix(t *testing.T) {
 		t.Fatalf("depths after timeout: %v, want every replica >= %d", depths(reps), wantDepth)
 	}
 
-	logs := make([][]*diem.Block, n)
+	logs := make([][]*diempb.Block, n)
 	for i, r := range reps {
 		logs[i] = r.Log()
 	}
 	for i := range logs {
 		for j := i + 1; j < n; j++ {
 			for k := range min(len(logs[i]), len(logs[j])) {
-				if logs[i][k].ID() != logs[j][k].ID() {
+				if !bytes.Equal(logs[i][k].GetId(), logs[j][k].GetId()) {
 					t.Fatalf("replicas %d and %d disagree at commit %d: round %d against round %d",
-						i+1, j+1, k, logs[i][k].Round, logs[j][k].Round)
+						i+1, j+1, k, logs[i][k].GetRound(), logs[j][k].GetRound())
 				}
 			}
 		}
 	}
 	for i, log := range logs {
-		if log[0].ParentID() != diem.GenesisBlock().ID() {
+		if !bytes.Equal(parentID(log[0]), diem.GenesisBlock().GetId()) {
 			t.Errorf("replica %d: the first commit does not extend genesis", i+1)
 		}
 		for k := 1; k < len(log); k++ {
-			if log[k].ParentID() != log[k-1].ID() {
+			if !bytes.Equal(parentID(log[k]), log[k-1].GetId()) {
 				t.Errorf("replica %d: commit %d does not extend commit %d", i+1, k, k-1)
 			}
-			if log[k].Round <= log[k-1].Round {
-				t.Errorf("replica %d: commit rounds not increasing: %d then %d", i+1, log[k-1].Round, log[k].Round)
+			if log[k].GetRound() <= log[k-1].GetRound() {
+				t.Errorf("replica %d: commit rounds not increasing: %d then %d", i+1, log[k-1].GetRound(), log[k].GetRound())
 			}
 		}
 	}

@@ -1,7 +1,10 @@
 package diem
 
 import (
+	"bytes"
 	"testing"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 )
 
 // testN and testQuorum give a 4-replica group (f=1, quorum=2f+1=3), matching
@@ -19,9 +22,9 @@ type safetyFixture struct {
 	crypto Crypto
 }
 
-func newSafetyFixture(id ID) *safetyFixture {
+func newSafetyFixture(id uint32) *safetyFixture {
 	ledger := NewMemLedger()
-	crypto := newTestSigner(id, testN)
+	crypto := newTestSigner(testN)
 	tree := NewBlockTree(id, testQuorum, ledger, crypto)
 	return &safetyFixture{
 		safety: NewSafety(id, NewVerifier(crypto, testQuorum), crypto, ledger, tree),
@@ -31,45 +34,47 @@ func newSafetyFixture(id ID) *safetyFixture {
 }
 
 // signAs signs digest as replica id. testSigner never fails to sign.
-func signAs(id ID, digest Hash) Signature {
-	sig, _ := newTestSigner(id, testN).Sign(digest)
+func signAs(id uint32, digest []byte) *diempb.Signature {
+	sig, _ := sign(newTestSigner(testN), id, digest)
 	return sig
 }
 
 // makeTC builds a TC for round out of one timeout vote per entry in
 // highQCRounds, signed by replicas 1..len(highQCRounds).
-func makeTC(round Round, highQCRounds ...Round) *TC {
-	tc := &TC{Round: round}
+func makeTC(round uint64, highQCRounds ...uint64) *diempb.TimeoutCert {
+	votes := make([]*diempb.TimeoutVote, len(highQCRounds))
 	for i, r := range highQCRounds {
-		id := ID(i + 1)
-		tc.Votes = append(tc.Votes, TimeoutVote{HighQCRound: r, Sig: signAs(id, TimeoutDigest(round, r))})
+		votes[i] = diempb.TimeoutVote_builder{
+			HighQcRound: r,
+			Sig:         signAs(uint32(i+1), TimeoutDigest(round, r)),
+		}.Build()
 	}
-	return tc
+	return diempb.TimeoutCert_builder{Round: round, Votes: votes}.Build()
 }
 
-// makeQC builds a QC over voteInfo whose LedgerCommitInfo is correctly bound
-// to it, signed by signerIDs and assembled by the first of them.
-func makeQC(voteInfo VoteInfo, commitStateID Hash, signerIDs ...ID) *QC {
-	commit := LedgerCommitInfo{CommitStateID: commitStateID, VoteInfoHash: VoteInfoHash(voteInfo)}
+// makeQC builds a QC over vi whose LedgerCommitInfo is correctly bound to it,
+// signed by signerIDs and assembled by the first of them.
+func makeQC(vi *diempb.VoteInfo, commitStateID []byte, signerIDs ...uint32) *diempb.QuorumCert {
+	commit := commitInfo(commitStateID, vi)
 	digest := LedgerCommitDigest(commit)
-	sigs := make([]Signature, len(signerIDs))
+	sigs := make([]*diempb.Signature, len(signerIDs))
 	for i, id := range signerIDs {
 		sigs[i] = signAs(id, digest)
 	}
 	author := signerIDs[0]
-	return &QC{
-		VoteInfo:         voteInfo,
+	return diempb.QuorumCert_builder{
+		VoteInfo:         vi,
 		LedgerCommitInfo: commit,
 		Signatures:       sigs,
 		Author:           author,
 		AuthorSig:        signAs(author, qcSigsDigest(sigs)),
-	}
+	}.Build()
 }
 
 func TestConsecutive(t *testing.T) {
 	tests := []struct {
 		name              string
-		blockRound, round Round
+		blockRound, round uint64
 		want              bool
 	}{
 		{"consecutive", 5, 4, true},
@@ -91,8 +96,8 @@ func TestSafeToExtend(t *testing.T) {
 	f := newSafetyFixture(1)
 	tests := []struct {
 		name                string
-		blockRound, qcRound Round
-		tc                  *TC
+		blockRound, qcRound uint64
+		tc                  *diempb.TimeoutCert
 		want                bool
 	}{
 		{"nil tc", 11, 5, nil, false},
@@ -113,10 +118,10 @@ func TestSafeToExtend(t *testing.T) {
 func TestSafeToVote(t *testing.T) {
 	tests := []struct {
 		name             string
-		highestVoteRound Round
-		blockRound       Round
-		qcRound          Round
-		tc               *TC
+		highestVoteRound uint64
+		blockRound       uint64
+		qcRound          uint64
+		tc               *diempb.TimeoutCert
 		want             bool
 	}{
 		{"monotonic round rejected", 5, 5, 3, nil, false},
@@ -139,11 +144,11 @@ func TestSafeToVote(t *testing.T) {
 func TestSafeToTimeout(t *testing.T) {
 	tests := []struct {
 		name             string
-		highestQCRound   Round
-		highestVoteRound Round
-		round            Round
-		qcRound          Round
-		tc               *TC
+		highestQCRound   uint64
+		highestVoteRound uint64
+		round            uint64
+		qcRound          uint64
+		tc               *diempb.TimeoutCert
 		want             bool
 	}{
 		{"qc round below highest qc round rejected", 5, 0, 10, 4, nil, false},
@@ -169,8 +174,8 @@ func TestSafeToTimeout(t *testing.T) {
 func TestCommitStateIDCandidate(t *testing.T) {
 	t.Run("round gap returns zero", func(t *testing.T) {
 		f := newSafetyFixture(1)
-		qc := &QC{VoteInfo: VoteInfo{ID: GenesisBlock().ID(), Round: 0}}
-		if got := f.safety.commitStateIDCandidate(5, qc); got != (Hash{}) {
+		qc := bareQC(GenesisBlock().GetId(), 0)
+		if got := f.safety.commitStateIDCandidate(5, qc); !bytes.Equal(got, zeroHash[:]) {
 			t.Errorf("commitStateIDCandidate = %x, want zero", got)
 		}
 	})
@@ -179,16 +184,16 @@ func TestCommitStateIDCandidate(t *testing.T) {
 		f := newSafetyFixture(1)
 		parent := NewBlock(1, 1, [][]byte{[]byte("a")}, GenesisQC())
 		state := f.ledger.Speculate(parent)
-		qc := &QC{VoteInfo: VoteInfo{ID: parent.ID(), Round: parent.Round}}
-		if got := f.safety.commitStateIDCandidate(2, qc); got != state {
+		qc := bareQC(parent.GetId(), parent.GetRound())
+		if got := f.safety.commitStateIDCandidate(2, qc); !bytes.Equal(got, state) {
 			t.Errorf("commitStateIDCandidate = %x, want %x", got, state)
 		}
 	})
 
 	t.Run("no pending state returns zero", func(t *testing.T) {
 		f := newSafetyFixture(1)
-		qc := &QC{VoteInfo: VoteInfo{ID: Hash{0xAA}, Round: 1}} // never speculated
-		if got := f.safety.commitStateIDCandidate(2, qc); got != (Hash{}) {
+		qc := bareQC(hashOf(0xAA), 1) // never speculated
+		if got := f.safety.commitStateIDCandidate(2, qc); !bytes.Equal(got, zeroHash[:]) {
 			t.Errorf("commitStateIDCandidate = %x, want zero", got)
 		}
 	})
@@ -208,7 +213,7 @@ func TestMakeVote(t *testing.T) {
 	t.Run("nil when the ledger never executed the block", func(t *testing.T) {
 		f := newSafetyFixture(1)
 		b := NewBlock(1, 1, nil, GenesisQC())
-		// b is never passed to Speculate, so PendingState(b.ID()) is false.
+		// b is never passed to Speculate, so PendingState(b.GetId()) is false.
 		if v := f.safety.MakeVote(b, nil); v != nil {
 			t.Errorf("MakeVote = %+v, want nil", v)
 		}
@@ -219,12 +224,12 @@ func TestMakeVote(t *testing.T) {
 
 		block1 := NewBlock(1, 1, [][]byte{[]byte("a")}, GenesisQC())
 		state1 := f.ledger.Speculate(block1)
-		voteInfo1 := VoteInfo{
-			ID: block1.ID(), Round: 1,
-			ParentID: GenesisBlock().ID(), ParentRound: 0,
-			ExecStateID: state1,
-		}
-		qc1 := makeQC(voteInfo1, Hash{}, 1, 2, 3)
+		voteInfo1 := diempb.VoteInfo_builder{
+			Id: block1.GetId(), Round: 1,
+			ParentId: GenesisBlock().GetId(), ParentRound: 0,
+			ExecStateId: state1,
+		}.Build()
+		qc1 := makeQC(voteInfo1, nil, 1, 2, 3)
 
 		block2 := NewBlock(1, 2, [][]byte{[]byte("b")}, qc1)
 		f.ledger.Speculate(block2)
@@ -239,7 +244,7 @@ func TestMakeVote(t *testing.T) {
 		if f.safety.HighestQCRound() != 1 {
 			t.Errorf("HighestQCRound = %d, want 1", f.safety.HighestQCRound())
 		}
-		if vote.LedgerCommitInfo.VoteInfoHash != VoteInfoHash(vote.VoteInfo) {
+		if !bytes.Equal(vote.GetLedgerCommitInfo().GetVoteInfoHash(), VoteInfoHash(vote.GetVoteInfo())) {
 			t.Error("LedgerCommitInfo.VoteInfoHash does not match VoteInfoHash(vote.VoteInfo)")
 		}
 	})
@@ -263,8 +268,8 @@ func TestMakeTimeout(t *testing.T) {
 		if f.safety.HighestVoteRound() != 1 {
 			t.Errorf("HighestVoteRound = %d, want 1", f.safety.HighestVoteRound())
 		}
-		digest := TimeoutDigest(to.Round, to.HighQC.Round())
-		if !f.crypto.Verify(digest, to.Sig) {
+		digest := TimeoutDigest(to.GetRound(), QCRound(to.GetHighQc()))
+		if !verifySig(f.crypto, digest, to.GetSig()) {
 			t.Error("timeout signature does not verify against TimeoutDigest(round, highQC.Round())")
 		}
 	})

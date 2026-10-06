@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/ecdsa"
@@ -25,7 +26,7 @@ import (
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/crypto"
-	"github.com/DanyGoT/HotStuffs/diem"
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/DanyGoT/HotStuffs/replica"
 	"github.com/relab/gorums"
 	"github.com/relab/gorums/benchkit"
@@ -148,7 +149,7 @@ func runLocal(n int) error {
 
 	reps := make([]*replica.Replica, n)
 	for i := range n {
-		id := diem.ID(i + 1)
+		id := uint32(i + 1)
 		reps[i] = replica.New(replica.Config{
 			ID: id, Key: privs[id], Keys: pubs,
 			Transactions: transactions(),
@@ -161,7 +162,7 @@ func runLocal(n int) error {
 
 // replicaKeys reads id's keys from -keys, or without it derives the seeded
 // set every replica computes alike.
-func replicaKeys(id diem.ID, n int) (*ecdsa.PrivateKey, map[diem.ID]*ecdsa.PublicKey, error) {
+func replicaKeys(id uint32, n int) (*ecdsa.PrivateKey, map[uint32]*ecdsa.PublicKey, error) {
 	if *keys != "" {
 		return crypto.ReadKeys(*keys, id)
 	}
@@ -185,7 +186,7 @@ func runOne() error {
 	if idx < 0 {
 		return fmt.Errorf("-self %q does not appear in -remotes", self)
 	}
-	id := diem.ID(idx + 1)
+	id := uint32(idx + 1)
 	priv, pubs, err := replicaKeys(id, len(addrs))
 	if err != nil {
 		return err
@@ -278,7 +279,7 @@ func writeResults(reps []*replica.Replica, elapsed time.Duration) error {
 // their common prefix, which is the whole point of running the thing.
 func report(reps []*replica.Replica) error {
 	w := os.Stdout
-	logs := make([][]*diem.Block, len(reps))
+	logs := make([][]*diempb.Block, len(reps))
 	for i, r := range reps {
 		logs[i] = r.Log()
 		c := r.Counters()
@@ -288,7 +289,7 @@ func report(reps []*replica.Replica) error {
 	for i := range logs {
 		for j := i + 1; j < len(logs); j++ {
 			for k := range min(len(logs[i]), len(logs[j])) {
-				if logs[i][k].ID() != logs[j][k].ID() {
+				if !bytes.Equal(logs[i][k].GetId(), logs[j][k].GetId()) {
 					return fmt.Errorf("replicas %d and %d disagree at commit %d", reps[i].ID(), reps[j].ID(), k)
 				}
 			}

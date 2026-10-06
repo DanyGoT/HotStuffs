@@ -1,8 +1,11 @@
 package diem
 
 import (
+	"bytes"
 	"testing"
 	"time"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 )
 
 // sim is a deterministic N-replica harness: one shared fake clock, one FIFO
@@ -11,13 +14,13 @@ import (
 type sim struct {
 	t     *testing.T
 	clock *fakeClock
-	ids   []ID
+	ids   []uint32
 
-	cores   map[ID]*Core
-	vers    map[ID]*Verifier
-	pools   map[ID]*FIFOPool
-	commits map[ID][]*Block
-	down    map[ID]bool
+	cores   map[uint32]*Core
+	vers    map[uint32]*Verifier
+	pools   map[uint32]*FIFOPool
+	commits map[uint32][]*diempb.Block
+	down    map[uint32]bool
 
 	queue    []func()
 	rejected int
@@ -31,35 +34,35 @@ const (
 	simKick = 64 * simRoundBase
 )
 
-func newSim(t *testing.T, n int, down ...ID) *sim {
+func newSim(t *testing.T, n int, down ...uint32) *sim {
 	t.Helper()
 	s := &sim{
 		t:       t,
 		clock:   newFakeClock(),
-		cores:   map[ID]*Core{},
-		vers:    map[ID]*Verifier{},
-		pools:   map[ID]*FIFOPool{},
-		commits: map[ID][]*Block{},
-		down:    map[ID]bool{},
+		cores:   map[uint32]*Core{},
+		vers:    map[uint32]*Verifier{},
+		pools:   map[uint32]*FIFOPool{},
+		commits: map[uint32][]*diempb.Block{},
+		down:    map[uint32]bool{},
 	}
 	for _, id := range down {
 		s.down[id] = true
 	}
 	for i := 1; i <= n; i++ {
-		s.ids = append(s.ids, ID(i))
+		s.ids = append(s.ids, uint32(i))
 	}
 	for _, id := range s.ids {
 		ledger := NewMemLedger()
-		ledger.OnCommit = func(b *Block) { s.commits[id] = append(s.commits[id], b) }
+		ledger.OnCommit = func(b *diempb.Block) { s.commits[id] = append(s.commits[id], b) }
 		pool := NewFIFOPool(1024, 2)
 		s.pools[id] = pool
-		s.vers[id] = NewVerifier(newTestSigner(id, n), QuorumSize(n))
+		s.vers[id] = NewVerifier(newTestSigner(n), QuorumSize(n))
 		s.cores[id] = New(Config{
 			ID:           id,
 			Validators:   s.ids,
 			Ledger:       ledger,
 			Transactions: pool.GetTransactions,
-			Crypto:       newTestSigner(id, n),
+			Crypto:       newTestSigner(n),
 			Transport:    &simNet{s: s},
 			Clock:        s.clock,
 			Backoff:      NewBackoff(simRoundBase, simRoundMax, 2),
@@ -73,7 +76,7 @@ func newSim(t *testing.T, n int, down ...ID) *sim {
 // replica's edge verification: the harness stands in for the network handler
 // goroutine, which is where authentication happens. A replica that is down
 // receives nothing, which is how a crash fault is modelled.
-func (s *sim) deliver(to ID, e Event) {
+func (s *sim) deliver(to uint32, e Event) {
 	if s.down[to] {
 		return
 	}
@@ -84,7 +87,7 @@ func (s *sim) deliver(to ID, e Event) {
 	s.queue = append(s.queue, func() { s.cores[to].Step(e) })
 }
 
-func (s *sim) verify(to ID, e Event) bool {
+func (s *sim) verify(to uint32, e Event) bool {
 	v := s.vers[to]
 	switch e := e.(type) {
 	case ProposalEvent:
@@ -138,13 +141,13 @@ func (s *sim) run(steps int) {
 
 type simNet struct{ s *sim }
 
-func (n *simNet) Proposal(p *ProposalMsg) { n.s.broadcast(ProposalEvent{Msg: p}) }
-func (n *simNet) Vote(v *VoteMsg, to ID)  { n.s.deliver(to, VoteEvent{Msg: v}) }
-func (n *simNet) Timeout(m *TimeoutMsg)   { n.s.broadcast(TimeoutEvent{Msg: m}) }
+func (n *simNet) Proposal(p *diempb.ProposalMsg)    { n.s.broadcast(ProposalEvent{Msg: p}) }
+func (n *simNet) Vote(v *diempb.VoteMsg, to uint32) { n.s.deliver(to, VoteEvent{Msg: v}) }
+func (n *simNet) Timeout(m *diempb.TimeoutMsg)      { n.s.broadcast(TimeoutEvent{Msg: m}) }
 
 // live is the replicas that were not crashed.
-func (s *sim) live() []ID {
-	var out []ID
+func (s *sim) live() []uint32 {
+	var out []uint32
 	for _, id := range s.ids {
 		if !s.down[id] {
 			out = append(out, id)
@@ -165,9 +168,9 @@ func (s *sim) checkAgreement() {
 			}
 			x, y := s.commits[a], s.commits[b]
 			for i := range min(len(x), len(y)) {
-				if x[i].ID() != y[i].ID() {
+				if !bytes.Equal(x[i].GetId(), y[i].GetId()) {
 					s.t.Fatalf("replicas %d and %d disagree at commit %d: round %d vs round %d",
-						a, b, i, x[i].Round, y[i].Round)
+						a, b, i, x[i].GetRound(), y[i].GetRound())
 				}
 			}
 		}
@@ -181,12 +184,12 @@ func (s *sim) checkChained() {
 	for _, id := range s.live() {
 		c := s.commits[id]
 		for i := 1; i < len(c); i++ {
-			if c[i].ParentID() != c[i-1].ID() {
+			if !bytes.Equal(parentID(c[i]), c[i-1].GetId()) {
 				s.t.Fatalf("replica %d: commit %d (round %d) does not extend commit %d (round %d)",
-					id, i, c[i].Round, i-1, c[i-1].Round)
+					id, i, c[i].GetRound(), i-1, c[i-1].GetRound())
 			}
-			if c[i].Round <= c[i-1].Round {
-				s.t.Fatalf("replica %d: commit rounds not increasing: %d then %d", id, c[i-1].Round, c[i].Round)
+			if c[i].GetRound() <= c[i-1].GetRound() {
+				s.t.Fatalf("replica %d: commit rounds not increasing: %d then %d", id, c[i-1].GetRound(), c[i].GetRound())
 			}
 		}
 	}
@@ -223,7 +226,7 @@ func TestCrashedLeaderRecovers(t *testing.T) {
 	s.checkAgreement()
 	s.checkChained()
 	for _, id := range s.live() {
-		if r := s.commits[id][0].Round; r == 1 {
+		if r := s.commits[id][0].GetRound(); r == 1 {
 			t.Fatalf("replica %d committed round 1, but its leader was crashed", id)
 		}
 	}
@@ -239,12 +242,12 @@ func TestCommitsAreTwoChains(t *testing.T) {
 
 	for _, id := range s.live() {
 		for _, b := range s.commits[id] {
-			if b.Round == 0 {
+			if b.GetRound() == 0 {
 				continue
 			}
-			if b.QC.Round()+1 != b.Round {
+			if QCRound(b.GetQc())+1 != b.GetRound() {
 				t.Fatalf("replica %d committed block at round %d over a QC for round %d: not a 2-chain",
-					id, b.Round, b.QC.Round())
+					id, b.GetRound(), QCRound(b.GetQc()))
 			}
 		}
 	}
@@ -264,7 +267,7 @@ func TestPayloadIsCommitted(t *testing.T) {
 
 	var payloads int
 	for _, b := range s.commits[1] {
-		payloads += len(b.Payload)
+		payloads += len(b.GetPayload())
 	}
 	if payloads == 0 {
 		t.Fatal("no transactions committed")
@@ -274,9 +277,9 @@ func TestPayloadIsCommitted(t *testing.T) {
 // dupNet counts what a replica sent.
 type dupNet struct{ proposals, votes, timeouts int }
 
-func (n *dupNet) Proposal(*ProposalMsg) { n.proposals++ }
-func (n *dupNet) Vote(*VoteMsg, ID)     { n.votes++ }
-func (n *dupNet) Timeout(*TimeoutMsg)   { n.timeouts++ }
+func (n *dupNet) Proposal(*diempb.ProposalMsg) { n.proposals++ }
+func (n *dupNet) Vote(*diempb.VoteMsg, uint32) { n.votes++ }
+func (n *dupNet) Timeout(*diempb.TimeoutMsg)   { n.timeouts++ }
 
 // TestDuplicateTimeoutDoesNotRetrigger pins the one place this implementation
 // departs from process_remote_timeout: the paper's f+1 and 2f+1 tests sit
@@ -289,7 +292,7 @@ func TestDuplicateTimeoutDoesNotRetrigger(t *testing.T) {
 	quorum, faulty := QuorumSize(n), Faulty(n)
 
 	ledger := NewMemLedger()
-	signer := newTestSigner(1, n)
+	signer := newTestSigner(n)
 	tree := NewBlockTree(1, quorum, ledger, signer)
 	safety := NewSafety(1, NewVerifier(signer, quorum), signer, ledger, tree)
 	net := &dupNet{}
@@ -297,14 +300,14 @@ func TestDuplicateTimeoutDoesNotRetrigger(t *testing.T) {
 		NewBackoff(simRoundBase, simRoundMax, 2), func(Event) {}, net, safety, tree)
 	pm.AdvanceRoundQC(genesisQC) // round 1
 
-	timeout := func(from ID) *TimeoutMsg {
+	timeout := func(from uint32) *diempb.TimeoutMsg {
 		t.Helper()
-		s := NewSafety(from, NewVerifier(newTestSigner(from, n), quorum), newTestSigner(from, n), NewMemLedger(), tree)
+		s := NewSafety(from, NewVerifier(newTestSigner(n), quorum), newTestSigner(n), NewMemLedger(), tree)
 		info := s.MakeTimeout(1, genesisQC, nil)
 		if info == nil {
 			t.Fatalf("replica %d refused to time out round 1", from)
 		}
-		return &TimeoutMsg{TmoInfo: *info, HighCommitQC: genesisQC}
+		return diempb.TimeoutMsg_builder{TmoInfo: info, HighCommitQc: genesisQC}.Build()
 	}
 
 	pm.ProcessRemoteTimeout(timeout(2))

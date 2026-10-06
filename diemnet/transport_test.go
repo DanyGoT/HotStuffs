@@ -1,6 +1,7 @@
 package diemnet
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/relab/gorums"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 const recvTimeout = 5 * time.Second
@@ -24,12 +26,12 @@ var insecureDial = gorums.WithGRPCDialOptions(grpc.WithTransportCredentials(inse
 // testKeys caches one key set per group size, so every signer a test builds for
 // a group of n verifies the others' signatures.
 var testKeys = map[int]struct {
-	privs map[diem.ID]*ecdsa.PrivateKey
-	pubs  map[diem.ID]*ecdsa.PublicKey
+	privs map[uint32]*ecdsa.PrivateKey
+	pubs  map[uint32]*ecdsa.PublicKey
 }{}
 
 // signer is replica id's signer in a group of n.
-func signer(t *testing.T, id diem.ID, n int) *crypto.Signer {
+func signer(t *testing.T, id uint32, n int) *crypto.Signer {
 	t.Helper()
 	ks, ok := testKeys[n]
 	if !ok {
@@ -40,7 +42,7 @@ func signer(t *testing.T, id diem.ID, n int) *crypto.Signer {
 		ks.privs, ks.pubs = privs, pubs
 		testKeys[n] = ks
 	}
-	return crypto.New(id, ks.privs[id], ks.pubs)
+	return crypto.New(ks.privs[id], ks.pubs)
 }
 
 // recv reads one event off q, failing the test after a generous timeout rather
@@ -86,7 +88,7 @@ func newGroup(t *testing.T, n int) []*peer {
 
 	peers := make([]*peer, n)
 	for i := range n {
-		id := diem.ID(i + 1)
+		id := uint32(i + 1)
 		q := diem.NewQueue(256)
 		peers[i] = &peer{
 			tr: New(Config{
@@ -115,53 +117,58 @@ func newGroup(t *testing.T, n int) []*peer {
 	return peers
 }
 
+// sig signs digest as signer and wraps the result as a proto Signature.
+func sig(t *testing.T, signer *crypto.Signer, id uint32, digest []byte) *diempb.Signature {
+	t.Helper()
+	raw, err := signer.Sign(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return diempb.Signature_builder{Signer: id, Sig: raw}.Build()
+}
+
 // round1 builds the three message types for round 1 over the genesis
 // certificate, signed by from in a group of n.
-func round1(t *testing.T, from diem.ID, n int) (*diem.ProposalMsg, *diem.VoteMsg, *diem.TimeoutMsg) {
+func round1(t *testing.T, from uint32, n int) (*diempb.ProposalMsg, *diempb.VoteMsg, *diempb.TimeoutMsg) {
 	t.Helper()
 	signer := signer(t, from, n)
-	sign := func(h diem.Hash) diem.Signature {
-		t.Helper()
-		s, err := signer.Sign(h)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return s
-	}
 
 	qc := diem.GenesisQC()
 	blk := diem.NewBlock(from, 1, [][]byte{[]byte("x")}, qc)
-	proposal := &diem.ProposalMsg{
+	proposal := diempb.ProposalMsg_builder{
 		Block:        blk,
-		HighCommitQC: qc,
+		HighCommitQc: qc,
 		Sender:       from,
-		Sig:          sign(blk.ID()),
-	}
+		Sig:          sig(t, signer, from, blk.GetId()),
+	}.Build()
 
-	voteInfo := diem.VoteInfo{
-		ID:          blk.ID(),
+	voteInfo := diempb.VoteInfo_builder{
+		Id:          blk.GetId(),
 		Round:       1,
-		ParentID:    qc.VoteInfo.ID,
-		ExecStateID: diem.ExecuteHash(diem.Hash{}, blk.Payload),
-	}
-	commit := diem.LedgerCommitInfo{VoteInfoHash: diem.VoteInfoHash(voteInfo)}
-	vote := &diem.VoteMsg{
+		ParentId:    qc.GetVoteInfo().GetId(),
+		ExecStateId: diem.ExecuteHash(make([]byte, 32), blk.GetPayload()),
+	}.Build()
+	commit := diempb.LedgerCommitInfo_builder{
+		CommitStateId: make([]byte, 32),
+		VoteInfoHash:  diem.VoteInfoHash(voteInfo),
+	}.Build()
+	vote := diempb.VoteMsg_builder{
 		VoteInfo:         voteInfo,
 		LedgerCommitInfo: commit,
-		HighCommitQC:     qc,
+		HighCommitQc:     qc,
 		Sender:           from,
-		Sig:              sign(diem.LedgerCommitDigest(commit)),
-	}
+		Sig:              sig(t, signer, from, diem.LedgerCommitDigest(commit)),
+	}.Build()
 
-	timeout := &diem.TimeoutMsg{
-		TmoInfo: diem.TimeoutInfo{
+	timeout := diempb.TimeoutMsg_builder{
+		TmoInfo: diempb.TimeoutInfo_builder{
 			Round:  1,
-			HighQC: qc,
+			HighQc: qc,
 			Sender: from,
-			Sig:    sign(diem.TimeoutDigest(1, 0)),
-		},
-		HighCommitQC: qc,
-	}
+			Sig:    sig(t, signer, from, diem.TimeoutDigest(1, 0)),
+		}.Build(),
+		HighCommitQc: qc,
+	}.Build()
 	return proposal, vote, timeout
 }
 
@@ -183,8 +190,8 @@ func TestMulticastReachesAll(t *testing.T) {
 			if !ok {
 				t.Fatalf("replica %d: got a non-proposal event", i+1)
 			}
-			if e.Msg.Block.ID() != proposal.Block.ID() {
-				t.Errorf("replica %d: block id = %x, want %x", i+1, e.Msg.Block.ID(), proposal.Block.ID())
+			if !bytes.Equal(e.Msg.GetBlock().GetId(), proposal.GetBlock().GetId()) {
+				t.Errorf("replica %d: block id = %x, want %x", i+1, e.Msg.GetBlock().GetId(), proposal.GetBlock().GetId())
 			}
 		}
 	})
@@ -196,8 +203,8 @@ func TestMulticastReachesAll(t *testing.T) {
 			if !ok {
 				t.Fatalf("replica %d: got a non-timeout event", i+1)
 			}
-			if e.Msg.TmoInfo.Round != 1 || e.Msg.TmoInfo.Sender != 1 {
-				t.Errorf("replica %d: tmo info = %+v, want round 1 from sender 1", i+1, e.Msg.TmoInfo)
+			if e.Msg.GetTmoInfo().GetRound() != 1 || e.Msg.GetTmoInfo().GetSender() != 1 {
+				t.Errorf("replica %d: tmo info = %+v, want round 1 from sender 1", i+1, e.Msg.GetTmoInfo())
 			}
 		}
 	})
@@ -206,7 +213,7 @@ func TestMulticastReachesAll(t *testing.T) {
 // TestVoteIsUnicast: DiemBFT 3.1 sends a vote to the next round's leader alone,
 // so exactly one replica must see it and the other three must see nothing.
 func TestVoteIsUnicast(t *testing.T) {
-	const n, to = 4, diem.ID(3)
+	const n, to = 4, uint32(3)
 	peers := newGroup(t, n)
 	_, vote, _ := round1(t, 1, n)
 
@@ -216,13 +223,13 @@ func TestVoteIsUnicast(t *testing.T) {
 	if !ok {
 		t.Fatalf("replica %d: got a non-vote event", to)
 	}
-	if e.Msg.Sender != vote.Sender || e.Msg.VoteInfo.ID != vote.VoteInfo.ID {
-		t.Errorf("vote = %+v, want sender %d on block %x", e.Msg, vote.Sender, vote.VoteInfo.ID)
+	if e.Msg.GetSender() != vote.GetSender() || !bytes.Equal(e.Msg.GetVoteInfo().GetId(), vote.GetVoteInfo().GetId()) {
+		t.Errorf("vote = %+v, want sender %d on block %x", e.Msg, vote.GetSender(), vote.GetVoteInfo().GetId())
 	}
 	// A multicast would already have delivered to the others by now, since the
 	// addressee's copy travels the same sender goroutine and the same queue.
 	for i, p := range peers {
-		if diem.ID(i+1) == to {
+		if uint32(i+1) == to {
 			continue
 		}
 		if !drained(p.q) {
@@ -239,7 +246,7 @@ func TestVoteToUnknownReplicaIsDropped(t *testing.T) {
 	_, vote, _ := round1(t, 1, n)
 
 	before := peers[0].tr.Counters().OutboundDropped
-	peers[0].tr.Vote(vote, diem.ID(n+1))
+	peers[0].tr.Vote(vote, uint32(n+1))
 
 	if !waitFor(recvTimeout, func() bool { return peers[0].tr.Counters().OutboundDropped > before }) {
 		t.Errorf("OutboundDropped = %d, want > %d", peers[0].tr.Counters().OutboundDropped, before)
@@ -247,7 +254,7 @@ func TestVoteToUnknownReplicaIsDropped(t *testing.T) {
 }
 
 // TestHandlerRejectsMalformed drives the handler directly, with no server
-// involved. Each row is converter- or verifier-rejected, and each must
+// involved. Each row is verifier-rejected, and each must
 // increment rejected without pushing an event. This is the test that shows the
 // transport boundary is the security boundary: stage B moved authentication
 // here so the consensus goroutine never runs a signature check.
@@ -267,32 +274,30 @@ func TestHandlerRejectsMalformed(t *testing.T) {
 			h.Proposal(gorums.ServerContext{}, diempb.ProposalMsg_builder{Sender: 1, Sig: forged}.Build())
 		}},
 		{"proposal whose signature does not verify", func() {
-			in := toProposal(proposal)
+			in := proto.Clone(proposal).(*diempb.ProposalMsg)
 			in.SetSig(forged)
 			h.Proposal(gorums.ServerContext{}, in)
 		}},
 		{"proposal whose sender is not its signer", func() {
-			in := toProposal(proposal)
+			in := proto.Clone(proposal).(*diempb.ProposalMsg)
 			in.SetSender(2)
 			h.Proposal(gorums.ServerContext{}, in)
 		}},
 		{"vote whose signature does not verify", func() {
-			in := toVote(vote)
+			in := proto.Clone(vote).(*diempb.VoteMsg)
 			in.SetSig(forged)
 			h.Vote(gorums.ServerContext{}, in)
 		}},
 		{"vote whose vote info was swapped behind the hash", func() {
-			in := toVote(vote)
-			swapped := vote.VoteInfo
-			swapped.Round = 99
-			in.SetVoteInfo(toVoteInfo(swapped))
+			in := proto.Clone(vote).(*diempb.VoteMsg)
+			in.GetVoteInfo().SetRound(99)
 			h.Vote(gorums.ServerContext{}, in)
 		}},
 		{"timeout with no tmo info", func() {
 			h.Timeout(gorums.ServerContext{}, diempb.TimeoutMsg_builder{}.Build())
 		}},
 		{"timeout whose signature does not verify", func() {
-			in := toTimeout(timeout)
+			in := proto.Clone(timeout).(*diempb.TimeoutMsg)
 			in.GetTmoInfo().SetSig(forged)
 			h.Timeout(gorums.ServerContext{}, in)
 		}},
@@ -320,9 +325,9 @@ func TestHandlerAcceptsWellFormed(t *testing.T) {
 	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: q.Push}
 	proposal, vote, timeout := round1(t, 1, n)
 
-	h.Proposal(gorums.ServerContext{}, toProposal(proposal))
-	h.Vote(gorums.ServerContext{}, toVote(vote))
-	h.Timeout(gorums.ServerContext{}, toTimeout(timeout))
+	h.Proposal(gorums.ServerContext{}, proto.Clone(proposal).(*diempb.ProposalMsg))
+	h.Vote(gorums.ServerContext{}, proto.Clone(vote).(*diempb.VoteMsg))
+	h.Timeout(gorums.ServerContext{}, proto.Clone(timeout).(*diempb.TimeoutMsg))
 
 	if got := h.rejected.Load(); got != 0 {
 		t.Fatalf("rejected = %d, want 0", got)
@@ -333,8 +338,8 @@ func TestHandlerAcceptsWellFormed(t *testing.T) {
 			if want != "proposal" {
 				t.Errorf("got a proposal, want a %s", want)
 			}
-			if e.Msg.Block.ID() != proposal.Block.ID() {
-				t.Errorf("block id = %x, want %x", e.Msg.Block.ID(), proposal.Block.ID())
+			if !bytes.Equal(e.Msg.GetBlock().GetId(), proposal.GetBlock().GetId()) {
+				t.Errorf("block id = %x, want %x", e.Msg.GetBlock().GetId(), proposal.GetBlock().GetId())
 			}
 		case diem.VoteEvent:
 			if want != "vote" {
@@ -420,23 +425,23 @@ const (
 // node is one replica's full stack over the Gorums transport, plus the commit
 // log the test reads.
 type node struct {
-	id   diem.ID
+	id   uint32
 	tr   *Transport
 	q    diem.Queue
 	core *diem.Core
 	loop *diem.Loop
 
 	mu      sync.Mutex
-	commits []*diem.Block
+	commits []*diempb.Block
 }
 
 // log snapshots the commit log. MemLedger.OnCommit runs on the consensus
 // goroutine and the test reads from its own, which is the whole reason for the
 // mutex — it guards application state, never protocol state.
-func (n *node) log() []*diem.Block {
+func (n *node) log() []*diempb.Block {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return append([]*diem.Block(nil), n.commits...)
+	return append([]*diempb.Block(nil), n.commits...)
 }
 
 // newCluster builds n replicas on one process's Gorums local servers, each with
@@ -455,18 +460,18 @@ func newCluster(t *testing.T, n int) []*node {
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	validators := make([]diem.ID, n)
+	validators := make([]uint32, n)
 	for i := range n {
-		validators[i] = diem.ID(i + 1)
+		validators[i] = uint32(i + 1)
 	}
 
 	nodes := make([]*node, n)
 	for i := range n {
-		id := diem.ID(i + 1)
+		id := uint32(i + 1)
 		nd := &node{id: id}
-		signer := crypto.New(id, privs[id], pubs)
+		signer := crypto.New(privs[id], pubs)
 		ledger := diem.NewMemLedger()
-		ledger.OnCommit = func(b *diem.Block) {
+		ledger.OnCommit = func(b *diempb.Block) {
 			nd.mu.Lock()
 			nd.commits = append(nd.commits, b)
 			nd.mu.Unlock()
@@ -591,16 +596,16 @@ func TestClusterCommitsOverGorums(t *testing.T) {
 	// goroutine and is not safe to read from here while the loop is running.
 	stop()
 
-	logs := make([][]*diem.Block, n)
+	logs := make([][]*diempb.Block, n)
 	for i, nd := range nodes {
 		logs[i] = nd.log()
 	}
 	for i := range logs {
 		for j := i + 1; j < n; j++ {
 			for k := range min(len(logs[i]), len(logs[j])) {
-				if logs[i][k].ID() != logs[j][k].ID() {
+				if !bytes.Equal(logs[i][k].GetId(), logs[j][k].GetId()) {
 					t.Fatalf("replicas %d and %d disagree at commit %d: round %d against round %d",
-						i+1, j+1, k, logs[i][k].Round, logs[j][k].Round)
+						i+1, j+1, k, logs[i][k].GetRound(), logs[j][k].GetRound())
 				}
 			}
 		}
@@ -609,7 +614,7 @@ func TestClusterCommitsOverGorums(t *testing.T) {
 	// A chain this deep that still agrees is the round-trip assertion at scale.
 	for i, log := range logs {
 		for k := 1; k < len(log); k++ {
-			if log[k].ParentID() != log[k-1].ID() {
+			if !bytes.Equal(log[k].GetQc().GetVoteInfo().GetId(), log[k-1].GetId()) {
 				t.Fatalf("replica %d: commit %d does not extend commit %d", i+1, k, k-1)
 			}
 		}

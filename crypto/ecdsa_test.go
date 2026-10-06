@@ -3,30 +3,24 @@ package crypto
 import (
 	"bytes"
 	"testing"
-
-	"github.com/DanyGoT/HotStuffs/diem"
 )
 
-// fixedHash returns a Hash of 32 identical bytes, a distinguishable stand-in
-// wherever a test just needs some digest.
-func fixedHash(b byte) diem.Hash {
-	var h diem.Hash
-	for i := range h {
-		h[i] = b
-	}
-	return h
+// fixedHash returns 32 identical bytes, a distinguishable stand-in wherever a
+// test just needs some digest.
+func fixedHash(b byte) []byte {
+	return bytes.Repeat([]byte{b}, 32)
 }
 
 // newSigners generates keys for n replicas and returns one Signer per ID.
-func newSigners(t *testing.T, n int) map[diem.ID]*Signer {
+func newSigners(t *testing.T, n int) map[uint32]*Signer {
 	t.Helper()
 	privs, pubs, err := GenerateKeys(n)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	signers := make(map[diem.ID]*Signer, n)
+	signers := make(map[uint32]*Signer, n)
 	for id, key := range privs {
-		signers[id] = New(id, key, pubs)
+		signers[id] = New(key, pubs)
 	}
 	return signers
 }
@@ -41,7 +35,7 @@ func TestGenerateKeys(t *testing.T) {
 		t.Fatalf("GenerateKeys(%d) = %d privs, %d pubs, want %d each", n, len(privs), len(pubs), n)
 	}
 	for i := 1; i <= n; i++ {
-		id := diem.ID(i)
+		id := uint32(i)
 		priv, ok := privs[id]
 		if !ok {
 			t.Fatalf("missing private key for ID %d", id)
@@ -68,12 +62,12 @@ func TestSeededKeysAgreeAcrossCalls(t *testing.T) {
 	}
 	msg := fixedHash(1)
 	for id, key := range privsA {
-		sig, err := New(id, key, pubsB).Sign(msg)
+		sig, err := New(key, pubsB).Sign(msg)
 		if err != nil {
 			t.Fatalf("Sign: %v", err)
 		}
 		// A separate process verifies with its own call's public keys.
-		if !New(1, nil, pubsB).Verify(msg, sig) {
+		if !New(nil, pubsB).Verify(id, msg, sig) {
 			t.Errorf("ID %d: signature from one call does not verify against another's keys", id)
 		}
 		for other, pub := range pubsB {
@@ -89,15 +83,12 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	signers := newSigners(t, n)
 	msg := fixedHash(1)
 	for i := 1; i <= n; i++ {
-		id := diem.ID(i)
+		id := uint32(i)
 		sig, err := signers[id].Sign(msg)
 		if err != nil {
 			t.Fatalf("ID %d: Sign: %v", id, err)
 		}
-		if sig.Signer != id {
-			t.Errorf("ID %d: sig.Signer = %d, want %d", id, sig.Signer, id)
-		}
-		if !signers[id].Verify(msg, sig) {
+		if !signers[id].Verify(id, msg, sig) {
 			t.Errorf("ID %d: Verify() = false, want true", id)
 		}
 	}
@@ -114,65 +105,27 @@ func TestVerify(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 
-	tampered := diem.Signature{Signer: sig1.Signer, Data: append([]byte{}, sig1.Data...)}
-	tampered.Data[0] ^= 0xFF
+	tampered := append([]byte{}, sig1...)
+	tampered[0] ^= 0xFF
 
 	tests := []struct {
-		name string
-		sig  diem.Signature
-		msg  diem.Hash
-		want bool
+		name   string
+		signer uint32
+		sig    []byte
+		msg    []byte
+		want   bool
 	}{
-		{"valid", sig1, msg, true},
-		{"rewritten to another replica's ID", diem.Signature{Signer: 2, Data: sig1.Data}, msg, false},
-		{"unregistered signer", diem.Signature{Signer: diem.ID(n + 1), Data: sig1.Data}, msg, false},
-		{"tampered data", tampered, msg, false},
-		{"empty data", diem.Signature{Signer: 1, Data: []byte{}}, msg, false},
-		{"nil data", diem.Signature{Signer: 1, Data: nil}, msg, false},
-		{"different digest", sig1, otherMsg, false},
+		{"valid", 1, sig1, msg, true},
+		{"claimed as another replica", 2, sig1, msg, false},
+		{"unregistered signer", n + 1, sig1, msg, false},
+		{"tampered data", 1, tampered, msg, false},
+		{"empty data", 1, []byte{}, msg, false},
+		{"nil data", 1, nil, msg, false},
+		{"different digest", 1, sig1, otherMsg, false},
 	}
 	for _, tt := range tests {
-		if got := signers[1].Verify(tt.msg, tt.sig); got != tt.want {
+		if got := signers[1].Verify(tt.signer, tt.msg, tt.sig); got != tt.want {
 			t.Errorf("%s: Verify() = %v, want %v", tt.name, got, tt.want)
-		}
-	}
-}
-
-func TestVerifyQuorum(t *testing.T) {
-	const n = 4
-	signers := newSigners(t, n)
-	msg := fixedHash(3)
-	quorum := diem.QuorumSize(n)
-
-	sign := func(id diem.ID) diem.Signature {
-		t.Helper()
-		sig, err := signers[id].Sign(msg)
-		if err != nil {
-			t.Fatalf("ID %d: Sign: %v", id, err)
-		}
-		return sig
-	}
-
-	full := make([]diem.Signature, quorum)
-	for i := range full {
-		full[i] = sign(diem.ID(i + 1))
-	}
-	// Registered but never signed with: a malformed DER blob under a real ID.
-	garbage := diem.Signature{Signer: diem.ID(quorum + 1), Data: []byte("not a signature")}
-
-	tests := []struct {
-		name string
-		sigs []diem.Signature
-		want bool
-	}{
-		{"exactly quorum distinct", full, true},
-		{"quorum-1", full[:quorum-1], false},
-		{"duplicate signer counted once", append(append([]diem.Signature{}, full[:quorum-1]...), full[0]), false},
-		{"quorum plus one garbage signature", append([]diem.Signature{garbage}, full...), true},
-	}
-	for _, tt := range tests {
-		if got := signers[1].VerifyQuorum(msg, tt.sigs); got != tt.want {
-			t.Errorf("%s: VerifyQuorum() = %v, want %v", tt.name, got, tt.want)
 		}
 	}
 }
@@ -189,10 +142,10 @@ func TestSignIsRandomized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	if bytes.Equal(sig1.Data, sig2.Data) {
+	if bytes.Equal(sig1, sig2) {
 		t.Error("two Sign calls over the same digest produced identical DER bytes")
 	}
-	if !signers[1].Verify(msg, sig1) || !signers[1].Verify(msg, sig2) {
+	if !signers[1].Verify(1, msg, sig1) || !signers[1].Verify(1, msg, sig2) {
 		t.Error("both signatures should verify")
 	}
 }

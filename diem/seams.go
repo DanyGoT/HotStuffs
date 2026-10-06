@@ -1,6 +1,10 @@
 package diem
 
-import "time"
+import (
+	"time"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
+)
 
 // Transport is the outbound half of the network. Every method is safe to call
 // from the consensus goroutine, never blocks, and returns no error: a BFT
@@ -8,22 +12,20 @@ import "time"
 // mechanism.
 type Transport interface {
 	// Proposal sends to all replicas, this one included.
-	Proposal(*ProposalMsg)
+	Proposal(*diempb.ProposalMsg)
 	// Vote sends to one replica: the leader of the next round. This is the
 	// paper's unicast, and it is why only that leader accumulates a QC.
-	Vote(*VoteMsg, ID)
+	Vote(*diempb.VoteMsg, uint32)
 	// Timeout sends to all replicas, this one included.
-	Timeout(*TimeoutMsg)
+	Timeout(*diempb.TimeoutMsg)
 }
 
 // Crypto signs and verifies digests. DiemBFT aggregates nothing, so a
 // certificate is a slice of signatures and there is no combine step.
 type Crypto interface {
-	Sign(msg Hash) (Signature, error)
-	Verify(msg Hash, sig Signature) bool
-	// VerifyQuorum reports whether sigs holds at least quorum distinct valid
-	// signatures over msg. Implementations may batch-verify.
-	VerifyQuorum(msg Hash, sigs []Signature) bool
+	Sign(digest []byte) ([]byte, error)
+	// Verify checks sig against the public key registered for signer.
+	Verify(signer uint32, digest, sig []byte) bool
 }
 
 // Clock is the time source. The deterministic harness supplies a fake one.

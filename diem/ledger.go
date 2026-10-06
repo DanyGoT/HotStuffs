@@ -1,5 +1,7 @@
 package diem
 
+import "github.com/DanyGoT/HotStuffs/proto/diempb"
+
 // MemLedger is the in-memory ledger (paper 3.2): a branching tree of
 // speculative states extending the last committed one, plus the committed
 // blocks LeaderElection walks back over.
@@ -11,12 +13,12 @@ package diem
 type MemLedger struct {
 	// Execute is the VM. It must be deterministic across replicas; that is the
 	// whole assumption DiemBFT's execution certification rests on.
-	Execute func(prev Hash, payload [][]byte) Hash
+	Execute func(prev []byte, payload [][]byte) []byte
 
 	// OnCommit, if set, runs once per block in commit order. It is where a
 	// replicated application consumes the chain; the paper leaves it to the
 	// "higher level logic" the Ledger module is the gateway for.
-	OnCommit func(*Block)
+	OnCommit func(*diempb.Block)
 
 	// History bounds the committed blocks kept for LeaderElection, which walks
 	// back window_size blocks and far enough to collect exclude_size authors.
@@ -24,17 +26,17 @@ type MemLedger struct {
 	// and must not grow without bound during a long run.
 	History int
 
-	pending   map[Hash]speculated
-	committed map[Hash]*Block
-	order     []Hash // committed ids, oldest first
+	pending   map[string]speculated
+	committed map[string]*diempb.Block
+	order     []string // committed ids, oldest first
 
-	commitID    Hash
-	commitState Hash
+	commitID    string
+	commitState []byte
 }
 
 type speculated struct {
-	block *Block
-	state Hash
+	block *diempb.Block
+	state []byte
 }
 
 const defaultHistory = 512
@@ -47,11 +49,11 @@ func NewMemLedger() *MemLedger {
 	l := &MemLedger{
 		Execute:   ExecuteHash,
 		History:   defaultHistory,
-		pending:   map[Hash]speculated{},
-		committed: map[Hash]*Block{},
+		pending:   map[string]speculated{},
+		committed: map[string]*diempb.Block{},
 	}
-	l.commitID = genesisBlock.ID()
-	l.commitState = ExecuteHash(Hash{}, nil)
+	l.commitID = string(genesisBlock.GetId())
+	l.commitState = ExecuteHash(zeroHash[:], nil)
 	l.committed[l.commitID] = genesisBlock
 	l.order = append(l.order, l.commitID)
 	return l
@@ -72,46 +74,46 @@ func NewMemLedger() *MemLedger {
 // The paper's signature is speculate(prev_block_id, block_id, txns). All
 // three are fields of b, and committed_block must hand a whole block back,
 // so the ledger has to hold the block in any case.
-func (l *MemLedger) Speculate(b *Block) Hash {
-	prev, ok := l.PendingState(b.ParentID())
+func (l *MemLedger) Speculate(b *diempb.Block) []byte {
+	prev, ok := l.PendingState(parentID(b))
 	if !ok {
-		return Hash{}
+		return zeroHash[:]
 	}
-	state := l.Execute(prev, b.Payload)
-	l.pending[b.ID()] = speculated{block: b, state: state}
+	state := l.Execute(prev, b.GetPayload())
+	l.pending[string(b.GetId())] = speculated{block: b, state: state}
 	return state
 }
 
 // PendingState is the speculated state for a block. The last committed block
 // answers too: its children extend it, and it is no longer pending.
-func (l *MemLedger) PendingState(blockID Hash) (Hash, bool) {
-	if blockID == l.commitID {
+func (l *MemLedger) PendingState(blockID []byte) ([]byte, bool) {
+	if string(blockID) == l.commitID {
 		return l.commitState, true
 	}
-	s, ok := l.pending[blockID]
+	s, ok := l.pending[string(blockID)]
 	return s.state, ok
 }
 
 // Commit exports the pending prefix ending at blockID and discards the
 // branches forking below it.
-func (l *MemLedger) Commit(blockID Hash) {
-	if blockID == l.commitID {
+func (l *MemLedger) Commit(blockID []byte) {
+	if string(blockID) == l.commitID {
 		return // already committed; the common case, since every QC re-commits
 	}
 	// Walk back to the commit frontier, then apply forward so the ledger sees
 	// commit order.
 	var chain []speculated
-	for id := blockID; id != l.commitID; {
+	for id := string(blockID); id != l.commitID; {
 		s, ok := l.pending[id]
 		if !ok {
 			return // blockID is not a descendant of the frontier: nothing to do
 		}
 		chain = append(chain, s)
-		id = s.block.ParentID()
+		id = string(parentID(s.block))
 	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		s := chain[i]
-		id := s.block.ID()
+		id := string(s.block.GetId())
 		delete(l.pending, id)
 		l.committed[id] = s.block
 		l.order = append(l.order, id)
@@ -125,8 +127,8 @@ func (l *MemLedger) Commit(blockID Hash) {
 }
 
 // CommittedBlock returns a committed block by id.
-func (l *MemLedger) CommittedBlock(blockID Hash) (*Block, bool) {
-	b, ok := l.committed[blockID]
+func (l *MemLedger) CommittedBlock(blockID []byte) (*diempb.Block, bool) {
+	b, ok := l.committed[string(blockID)]
 	return b, ok
 }
 
@@ -137,7 +139,7 @@ func (l *MemLedger) prune() {
 	for changed := true; changed; {
 		changed = false
 		for id, s := range l.pending {
-			parent := s.block.ParentID()
+			parent := string(parentID(s.block))
 			if parent == l.commitID {
 				continue
 			}
