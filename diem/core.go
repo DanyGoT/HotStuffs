@@ -2,6 +2,8 @@ package diem
 
 import (
 	"time"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 )
 
 // Core is the paper's Main module (3.1): the event loop that dispatches
@@ -9,7 +11,7 @@ import (
 // single goroutine, so it holds no locks, and it never enqueues — every
 // self-addressed message goes out through the transport's local node.
 type Core struct {
-	id     ID
+	id     uint32
 	crypto Crypto
 	net    Transport
 	clock  Clock
@@ -27,8 +29,8 @@ type Core struct {
 // Config is everything a Core needs. Every field is required except
 // Transactions, Observer, WindowSize and ExcludeSize.
 type Config struct {
-	ID         ID
-	Validators []ID
+	ID         uint32
+	Validators []uint32
 	Ledger     *MemLedger
 	Crypto     Crypto
 	Transport  Transport
@@ -58,11 +60,11 @@ type Config struct {
 
 // State is the scalar snapshot an observer sees.
 type State struct {
-	Round            Round
-	HighQCRound      Round
-	HighCommitRound  Round
-	HighestVoteRound Round
-	HighestQCRound   Round
+	Round            uint64
+	HighQCRound      uint64
+	HighCommitRound  uint64
+	HighestVoteRound uint64
+	HighestQCRound   uint64
 
 	// DeclinedMissingAncestor is monotonic. A rate taken over it is the rate at
 	// which this replica lost a vote to a gap in its own chain, which is the
@@ -137,8 +139,8 @@ func (c *Core) Stop() { c.pacemaker.Stop() }
 func (c *Core) State() State {
 	return State{
 		Round:            c.pacemaker.CurrentRound(),
-		HighQCRound:      c.tree.HighQC().Round(),
-		HighCommitRound:  c.tree.HighCommitQC().Round(),
+		HighQCRound:      QCRound(c.tree.HighQC()),
+		HighCommitRound:  QCRound(c.tree.HighCommitQC()),
 		HighestVoteRound: c.safety.HighestVoteRound(),
 		HighestQCRound:   c.safety.HighestQCRound(),
 
@@ -177,7 +179,7 @@ func (c *Core) Step(e Event) {
 // processCertificateQC is the paper's process_certificate_qc. The order
 // matters: LeaderElection reads the round the certificate arrived in, so it
 // must run before the Pacemaker advances past it.
-func (c *Core) processCertificateQC(qc *QC) {
+func (c *Core) processCertificateQC(qc *diempb.QuorumCert) {
 	if qc == nil {
 		return
 	}
@@ -189,22 +191,23 @@ func (c *Core) processCertificateQC(qc *QC) {
 // processProposalMsg is the paper's process_proposal_msg. Authentication has
 // already happened at the edge, on the goroutine the message arrived on, so
 // what is left here is authorization by protocol state.
-func (c *Core) processProposalMsg(p *ProposalMsg) {
-	c.processCertificateQC(p.Block.QC)
-	c.processCertificateQC(p.HighCommitQC)
-	c.pacemaker.AdvanceRoundTC(p.LastRoundTC)
+func (c *Core) processProposalMsg(p *diempb.ProposalMsg) {
+	block := p.GetBlock()
+	c.processCertificateQC(block.GetQc())
+	c.processCertificateQC(p.GetHighCommitQc())
+	c.pacemaker.AdvanceRoundTC(p.GetLastRoundTc())
 
 	// The one message check that cannot move to the edge: GetLeader (3.7) reads
 	// the committed blocks for its reputation path, so who leads a round is a
 	// function of protocol state, not of the round number.
 	round := c.pacemaker.CurrentRound()
 	leader := c.leaders.GetLeader(round)
-	if p.Block.Round != round || p.Sender != leader || p.Block.Author != leader {
+	if block.GetRound() != round || p.GetSender() != leader || block.GetAuthor() != leader {
 		return
 	}
 
-	c.tree.ExecuteAndInsert(p.Block)
-	vote := c.safety.MakeVote(p.Block, p.LastRoundTC)
+	c.tree.ExecuteAndInsert(block)
+	vote := c.safety.MakeVote(block, p.GetLastRoundTc())
 	if vote == nil {
 		return
 	}
@@ -213,10 +216,10 @@ func (c *Core) processProposalMsg(p *ProposalMsg) {
 	c.net.Vote(vote, c.leaders.GetLeader(round+1))
 }
 
-func (c *Core) processTimeoutMsg(m *TimeoutMsg) {
-	c.processCertificateQC(m.TmoInfo.HighQC)
-	c.processCertificateQC(m.HighCommitQC)
-	c.pacemaker.AdvanceRoundTC(m.LastRoundTC)
+func (c *Core) processTimeoutMsg(m *diempb.TimeoutMsg) {
+	c.processCertificateQC(m.GetTmoInfo().GetHighQc())
+	c.processCertificateQC(m.GetHighCommitQc())
+	c.pacemaker.AdvanceRoundTC(m.GetLastRoundTc())
 
 	tc := c.pacemaker.ProcessRemoteTimeout(m)
 	if tc == nil {
@@ -226,8 +229,8 @@ func (c *Core) processTimeoutMsg(m *TimeoutMsg) {
 	c.processNewRoundEvent(tc)
 }
 
-func (c *Core) processVoteMsg(m *VoteMsg) {
-	if m.VoteInfo.Round > c.pacemaker.CurrentRound()+maxRoundLead {
+func (c *Core) processVoteMsg(m *diempb.VoteMsg) {
+	if m.GetVoteInfo().GetRound() > c.pacemaker.CurrentRound()+maxRoundLead {
 		return
 	}
 	qc := c.tree.ProcessVote(m)
@@ -242,7 +245,7 @@ func (c *Core) processVoteMsg(m *VoteMsg) {
 // entered. Note that entering a round on a proposal's certificate does not
 // come through here: the leader of round r+1 proposes once it has assembled
 // the certificate for round r itself, which is what pipelines the two.
-func (c *Core) processNewRoundEvent(lastTC *TC) {
+func (c *Core) processNewRoundEvent(lastTC *diempb.TimeoutCert) {
 	round := c.pacemaker.CurrentRound()
 	if c.leaders.GetLeader(round) != c.id {
 		return
@@ -252,23 +255,23 @@ func (c *Core) processNewRoundEvent(lastTC *TC) {
 		txns = c.transactions()
 	}
 	b := c.tree.GenerateBlock(txns, round)
-	sig, err := c.crypto.Sign(b.ID())
+	sig, err := sign(c.crypto, c.id, b.GetId())
 	if err != nil {
 		return
 	}
-	c.net.Proposal(&ProposalMsg{
+	c.net.Proposal(diempb.ProposalMsg_builder{
 		Block:        b,
-		LastRoundTC:  justifyingTC(b.QC.Round(), round, lastTC),
-		HighCommitQC: c.tree.HighCommitQC(),
+		LastRoundTc:  justifyingTC(QCRound(b.GetQc()), round, lastTC),
+		HighCommitQc: c.tree.HighCommitQC(),
 		Sender:       c.id,
 		Sig:          sig,
-	})
+	}.Build())
 }
 
 // justifyingTC drops a TC the block's own certificate already justifies. A
 // proposal carrying a redundant TC is ill-formed by the paper's rule and every
 // honest replica would discard it.
-func justifyingTC(qcRound, round Round, tc *TC) *TC {
+func justifyingTC(qcRound, round uint64, tc *diempb.TimeoutCert) *diempb.TimeoutCert {
 	if qcRound+1 == round {
 		return nil
 	}

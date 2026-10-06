@@ -4,7 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"hash"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
 )
+
+// hashLen is the size of every digest on the wire.
+const hashLen = sha256.Size
 
 // Domain tags keep the things a replica signs and hashes apart: a vote signature can
 // never verify as a timeout signature, nor either as a block id. Each digest
@@ -36,11 +41,11 @@ func writeBytes(h hash.Hash, b []byte) {
 	h.Write(b)
 }
 
-func writeSigs(h hash.Hash, sigs []Signature) {
+func writeSigs(h hash.Hash, sigs []*diempb.Signature) {
 	writeUint64(h, uint64(len(sigs)))
 	for _, s := range sigs {
-		writeUint32(h, uint32(s.Signer))
-		writeBytes(h, s.Data)
+		writeUint32(h, s.GetSigner())
+		writeBytes(h, s.GetSig())
 	}
 }
 
@@ -50,74 +55,73 @@ func writeSigs(h hash.Hash, sigs []Signature) {
 // The signature set is inside the id, which is what makes the voters for a
 // committed round uniquely determined by the chain: two leaders that certify
 // the same parent with different quorums produce different blocks.
-func blockID(author ID, round Round, payload [][]byte, qc *QC) Hash {
+func blockID(author uint32, round uint64, payload [][]byte, qc *diempb.QuorumCert) []byte {
 	h := sha256.New()
 	h.Write([]byte{domainBlock})
-	writeUint32(h, uint32(author))
-	writeUint64(h, uint64(round))
+	writeUint32(h, author)
+	writeUint64(h, round)
 	writeUint64(h, uint64(len(payload)))
 	for _, p := range payload {
 		writeBytes(h, p)
 	}
-	parent := qc.VoteInfo.ID
-	h.Write(parent[:])
-	writeSigs(h, qc.Signatures)
-	return Hash(h.Sum(nil))
+	h.Write(qc.GetVoteInfo().GetId())
+	writeSigs(h, qc.GetSignatures())
+	return h.Sum(nil)
 }
 
 // VoteInfoHash is the digest a LedgerCommitInfo binds its vote to.
-func VoteInfoHash(v VoteInfo) Hash {
+func VoteInfoHash(v *diempb.VoteInfo) []byte {
 	h := sha256.New()
 	h.Write([]byte{domainVoteInfo})
-	h.Write(v.ID[:])
-	writeUint64(h, uint64(v.Round))
-	h.Write(v.ParentID[:])
-	writeUint64(h, uint64(v.ParentRound))
-	h.Write(v.ExecStateID[:])
-	return Hash(h.Sum(nil))
+	h.Write(v.GetId())
+	writeUint64(h, v.GetRound())
+	h.Write(v.GetParentId())
+	writeUint64(h, v.GetParentRound())
+	h.Write(v.GetExecStateId())
+	return h.Sum(nil)
 }
 
 // LedgerCommitDigest is what a vote signature covers, and so also the key
 // votes are aggregated under: two votes that agree on it agree on everything
 // that matters, the VoteInfo included, since its hash is inside.
-func LedgerCommitDigest(l LedgerCommitInfo) Hash {
+func LedgerCommitDigest(l *diempb.LedgerCommitInfo) []byte {
 	h := sha256.New()
 	h.Write([]byte{domainLedgerCommit})
-	h.Write(l.CommitStateID[:])
-	h.Write(l.VoteInfoHash[:])
-	return Hash(h.Sum(nil))
+	h.Write(l.GetCommitStateId())
+	h.Write(l.GetVoteInfoHash())
+	return h.Sum(nil)
 }
 
 // TimeoutDigest is what a timeout signature covers: the round abandoned and
 // the signer's own highest certified round. Both are needed, because a TC's
 // safe-to-extend check reads the reported rounds back out.
-func TimeoutDigest(round, highQCRound Round) Hash {
+func TimeoutDigest(round, highQCRound uint64) []byte {
 	h := sha256.New()
 	h.Write([]byte{domainTimeout})
-	writeUint64(h, uint64(round))
-	writeUint64(h, uint64(highQCRound))
-	return Hash(h.Sum(nil))
+	writeUint64(h, round)
+	writeUint64(h, highQCRound)
+	return h.Sum(nil)
 }
 
 // qcSigsDigest is what a QC's author signature covers.
-func qcSigsDigest(sigs []Signature) Hash {
+func qcSigsDigest(sigs []*diempb.Signature) []byte {
 	h := sha256.New()
 	h.Write([]byte{domainQCSigs})
 	writeSigs(h, sigs)
-	return Hash(h.Sum(nil))
+	return h.Sum(nil)
 }
 
 // ExecuteHash is the default speculative execution: a hash chain over the
 // previous state and the payload. It is a stand-in for a VM, and it is enough
 // for the property DiemBFT actually needs from execution — that honest
 // replicas agree on the resulting state id and a diverging one does not.
-func ExecuteHash(prev Hash, payload [][]byte) Hash {
+func ExecuteHash(prev []byte, payload [][]byte) []byte {
 	h := sha256.New()
 	h.Write([]byte{domainState})
-	h.Write(prev[:])
+	h.Write(prev)
 	writeUint64(h, uint64(len(payload)))
 	for _, p := range payload {
 		writeBytes(h, p)
 	}
-	return Hash(h.Sum(nil))
+	return h.Sum(nil)
 }

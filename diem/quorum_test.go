@@ -1,6 +1,10 @@
 package diem
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
+)
 
 func TestFaulty(t *testing.T) {
 	for n := 1; n <= 31; n++ {
@@ -34,18 +38,24 @@ func TestQuorumSizeProperties(t *testing.T) {
 	}
 }
 
-func TestQuorumReached(t *testing.T) {
-	// verify treats any non-nil Data as a valid signature; QuorumReached's own
-	// counting logic, not the crypto, is what these tables exercise.
-	valid := func(id ID) Signature { return Signature{Signer: id, Data: []byte{1}} }
-	invalid := func(id ID) Signature { return Signature{Signer: id, Data: nil} }
-	verify := func(_ Hash, sig Signature) bool { return sig.Data != nil }
-	var msg Hash
+// bodyCrypto treats any signature with a non-empty body as valid:
+// QuorumReached's own counting logic, not the crypto, is what the table below
+// exercises.
+type bodyCrypto struct{ Crypto }
 
-	sigsOf := func(f func(ID) Signature, from, to int) []Signature {
-		var sigs []Signature
+func (bodyCrypto) Verify(_ uint32, _, sig []byte) bool { return len(sig) > 0 }
+
+func TestQuorumReached(t *testing.T) {
+	valid := func(id uint32) *diempb.Signature {
+		return diempb.Signature_builder{Signer: id, Sig: []byte{1}}.Build()
+	}
+	invalid := func(id uint32) *diempb.Signature { return diempb.Signature_builder{Signer: id}.Build() }
+	digest := hashOf()
+
+	sigsOf := func(f func(uint32) *diempb.Signature, from, to int) []*diempb.Signature {
+		var sigs []*diempb.Signature
 		for i := from; i <= to; i++ {
-			sigs = append(sigs, f(ID(i)))
+			sigs = append(sigs, f(uint32(i)))
 		}
 		return sigs
 	}
@@ -54,7 +64,7 @@ func TestQuorumReached(t *testing.T) {
 		quorum := QuorumSize(n)
 		tests := []struct {
 			name string
-			sigs []Signature
+			sigs []*diempb.Signature
 			want bool
 		}{
 			{"exactly quorum distinct valid", sigsOf(valid, 1, quorum), true},
@@ -64,14 +74,14 @@ func TestQuorumReached(t *testing.T) {
 			{"empty", nil, false},
 		}
 		for _, tt := range tests {
-			if got := QuorumReached(n, msg, tt.sigs, verify); got != tt.want {
+			if got := QuorumReached(bodyCrypto{}, quorum, digest, tt.sigs); got != tt.want {
 				t.Errorf("n=%d %s: QuorumReached() = %v, want %v", n, tt.name, got, tt.want)
 			}
 		}
 	}
 
 	// n = 1 has quorum 1 too, but zero signatures still cannot reach it.
-	if QuorumReached(1, msg, nil, verify) {
-		t.Error("QuorumReached(1, ..., nil, ...) = true, want false")
+	if QuorumReached(bodyCrypto{}, 1, digest, nil) {
+		t.Error("QuorumReached(quorum 1, nil) = true, want false")
 	}
 }

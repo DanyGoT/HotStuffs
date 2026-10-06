@@ -9,9 +9,9 @@ import (
 	"github.com/relab/gorums"
 )
 
-// handler is the inbound half of the transport. Every message is converted and
-// verified here, on the Gorums handler goroutine that already runs in parallel
-// across senders, so no signature check ever reaches the consensus goroutine.
+// handler is the inbound half of the transport. Every message is verified
+// here, on the Gorums handler goroutine that already runs in parallel across
+// senders, so no signature check ever reaches the consensus goroutine.
 //
 // GORUMS: ServerContext exposes no authenticated sender identity — the
 // gorums-node-id metadata key is internal, and peer.FromContext gives an
@@ -35,28 +35,25 @@ type handler struct {
 var _ diemrpc.DiemServer = (*handler)(nil)
 
 func (h *handler) Proposal(_ gorums.ServerContext, in *diempb.ProposalMsg) {
-	p, err := fromProposal(in)
-	if err != nil || !h.ver.VerifyProposal(p) {
+	if !h.ver.VerifyProposal(in) {
 		h.rejected.Add(1)
 		return
 	}
-	h.sink(diem.ProposalEvent{Msg: p})
+	h.sink(diem.ProposalEvent{Msg: in})
 }
 
 func (h *handler) Vote(_ gorums.ServerContext, in *diempb.VoteMsg) {
-	m, err := fromVote(in)
-	if err != nil || !h.ver.VerifyVote(m) {
+	if !h.ver.VerifyVote(in) {
 		h.rejected.Add(1)
 		return
 	}
-	h.sink(diem.VoteEvent{Msg: m})
+	h.sink(diem.VoteEvent{Msg: in})
 }
 
 func (h *handler) Timeout(_ gorums.ServerContext, in *diempb.TimeoutMsg) {
-	m, err := fromTimeout(in)
-	if err != nil || !h.ver.VerifyTimeout(m) {
+	if !h.ver.VerifyTimeout(in) {
 		h.rejected.Add(1)
 		return
 	}
-	h.sink(diem.TimeoutEvent{Msg: m})
+	h.sink(diem.TimeoutEvent{Msg: in})
 }

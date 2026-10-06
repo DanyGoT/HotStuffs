@@ -3,6 +3,9 @@ package diem
 import (
 	"slices"
 	"testing"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"google.golang.org/protobuf/proto"
 )
 
 // The tests here cover the boundary the paper delegates to "other parts of the
@@ -13,7 +16,7 @@ import (
 // newTestVerifier returns the Verifier for the 4-replica group testN and
 // testQuorum describe.
 func newTestVerifier() *Verifier {
-	return NewVerifier(newTestSigner(1, testN), testQuorum)
+	return NewVerifier(newTestSigner(testN), testQuorum)
 }
 
 // TestVerifyRejectsNonCanonicalCertificates pins the canonical signer order on
@@ -21,26 +24,26 @@ func newTestVerifier() *Verifier {
 // slice byte for byte (blockID), so a leader that permutes or pads one valid
 // quorum mints arbitrarily many distinct, individually valid blocks over the
 // same parent — one entry in the pending tree and one speculated state each.
-// Deduplication inside VerifyQuorum does not catch it: it counts signers and
+// Deduplication inside QuorumReached does not catch it: it counts signers and
 // says nothing about their order or the slice's length.
 func TestVerifyRejectsNonCanonicalCertificates(t *testing.T) {
 	v := newTestVerifier()
-	voteInfo := VoteInfo{ID: GenesisBlock().ID(), Round: 1}
+	vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
 
 	t.Run("QC signatures out of signer order", func(t *testing.T) {
-		qc := makeQC(voteInfo, Hash{}, 1, 2, 3)
+		qc := makeQC(vi, nil, 1, 2, 3)
 		if !v.VerifyQC(qc) {
 			t.Fatal("VerifyQC = false for a canonical quorum, want true")
 		}
-		slices.Reverse(qc.Signatures)
+		slices.Reverse(qc.GetSignatures())
 		if v.VerifyQC(qc) {
 			t.Error("VerifyQC = true for a permuted signature set, want false")
 		}
 	})
 
 	t.Run("QC signatures padded with a repeated signer", func(t *testing.T) {
-		qc := makeQC(voteInfo, Hash{}, 1, 2, 3)
-		qc.Signatures = append(qc.Signatures, qc.Signatures[0])
+		qc := makeQC(vi, nil, 1, 2, 3)
+		qc.SetSignatures(append(qc.GetSignatures(), qc.GetSignatures()[0]))
 		if v.VerifyQC(qc) {
 			t.Error("VerifyQC = true for a padded signature set, want false")
 		}
@@ -51,7 +54,7 @@ func TestVerifyRejectsNonCanonicalCertificates(t *testing.T) {
 		if !v.VerifyTC(tc) {
 			t.Fatal("VerifyTC = false for a canonical quorum, want true")
 		}
-		slices.Reverse(tc.Votes)
+		slices.Reverse(tc.GetVotes())
 		if v.VerifyTC(tc) {
 			t.Error("VerifyTC = true for a permuted vote set, want false")
 		}
@@ -66,15 +69,15 @@ func TestVerifyRejectsNonCanonicalCertificates(t *testing.T) {
 // speculated and stored the block.
 func TestVerifyProposalRejectsCertificateAtOrAboveItsOwnRound(t *testing.T) {
 	v := newTestVerifier()
-	qc := makeQC(VoteInfo{ID: Hash{0x11}, Round: 10}, Hash{}, 1, 2, 3)
+	qc := makeQC(voteInfo(hashOf(0x11), 10, nil, 0), nil, 1, 2, 3)
 	b := NewBlock(1, 5, [][]byte{{0xaa}}, qc)
-	p := &ProposalMsg{
+	p := diempb.ProposalMsg_builder{
 		Block:       b,
-		LastRoundTC: makeTC(4, 1, 2, 3),
+		LastRoundTc: makeTC(4, 1, 2, 3),
 		Sender:      1,
-		Sig:         signAs(1, b.ID()),
-	}
-	if !p.WellFormed() {
+		Sig:         signAs(1, b.GetId()),
+	}.Build()
+	if !WellFormedProposal(p) {
 		t.Fatal("setup: the proposal is meant to pass the well-formedness rule")
 	}
 	if v.VerifyProposal(p) {
@@ -107,17 +110,17 @@ func TestVerifyQC(t *testing.T) {
 	})
 
 	t.Run("vote info not bound to the ledger commit info is rejected", func(t *testing.T) {
-		voteInfo := VoteInfo{ID: GenesisBlock().ID(), Round: 1}
-		qc := makeQC(voteInfo, Hash{}, 1, 2, 3)
-		qc.VoteInfo.Round = 2 // tamper after the commit hash was computed over Round: 1
+		vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
+		qc := makeQC(vi, nil, 1, 2, 3)
+		qc.GetVoteInfo().SetRound(2) // tamper after the commit hash was computed over Round: 1
 		if v.VerifyQC(qc) {
 			t.Error("VerifyQC = true for a QC whose VoteInfo does not match its LedgerCommitInfo hash")
 		}
 	})
 
 	t.Run("too few signatures is rejected", func(t *testing.T) {
-		voteInfo := VoteInfo{ID: GenesisBlock().ID(), Round: 1}
-		qc := makeQC(voteInfo, Hash{}, 1, 2) // quorum is 3
+		vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
+		qc := makeQC(vi, nil, 1, 2) // quorum is 3
 		if v.VerifyQC(qc) {
 			t.Error("VerifyQC = true below quorum, want false")
 		}
@@ -134,22 +137,20 @@ func TestVerifyTC(t *testing.T) {
 	})
 
 	t.Run("duplicate signers rejected", func(t *testing.T) {
-		tc := &TC{Round: 5, Votes: []TimeoutVote{
-			{HighQCRound: 3, Sig: signAs(1, TimeoutDigest(5, 3))},
-			{HighQCRound: 3, Sig: signAs(1, TimeoutDigest(5, 3))},
-			{HighQCRound: 4, Sig: signAs(2, TimeoutDigest(5, 4))},
-		}}
+		tc := tcOf(5,
+			tcVote(3, signAs(1, TimeoutDigest(5, 3))),
+			tcVote(3, signAs(1, TimeoutDigest(5, 3))),
+			tcVote(4, signAs(2, TimeoutDigest(5, 4))))
 		if v.VerifyTC(tc) {
 			t.Error("VerifyTC = true with a duplicate signer, want false")
 		}
 	})
 
 	t.Run("wrong-digest signature rejected", func(t *testing.T) {
-		tc := &TC{Round: 5, Votes: []TimeoutVote{
-			{HighQCRound: 3, Sig: signAs(1, TimeoutDigest(5, 3))},
-			{HighQCRound: 4, Sig: signAs(2, TimeoutDigest(99, 4))}, // signed a different round
-			{HighQCRound: 5, Sig: signAs(3, TimeoutDigest(5, 5))},
-		}}
+		tc := tcOf(5,
+			tcVote(3, signAs(1, TimeoutDigest(5, 3))),
+			tcVote(4, signAs(2, TimeoutDigest(99, 4))), // signed a different round
+			tcVote(5, signAs(3, TimeoutDigest(5, 5))))
 		if v.VerifyTC(tc) {
 			t.Error("VerifyTC = true with a signature over the wrong digest, want false")
 		}
@@ -177,24 +178,24 @@ func TestVerifyProposalRejects(t *testing.T) {
 	v := newTestVerifier()
 	tests := []struct {
 		name string
-		msg  func() *ProposalMsg
+		msg  func() *diempb.ProposalMsg
 	}{
-		{"signature is by someone other than the sender", func() *ProposalMsg {
+		{"signature is by someone other than the sender", func() *diempb.ProposalMsg {
 			p := proposal(1, 1, 1)
-			p.Sig = signAs(3, p.Block.ID())
+			p.SetSig(signAs(3, p.GetBlock().GetId()))
 			return p
 		}},
-		{"signature covers something other than the block", func() *ProposalMsg {
+		{"signature covers something other than the block", func() *diempb.ProposalMsg {
 			p := proposal(1, 1, 1)
-			p.Sig = signAs(1, Hash{0xff})
+			p.SetSig(signAs(1, hashOf(0xff)))
 			return p
 		}},
-		{"carries a TC its own QC already makes redundant", func() *ProposalMsg {
+		{"carries a TC its own QC already makes redundant", func() *diempb.ProposalMsg {
 			// Well-formedness: a proposal for round r carries the TC of r-1
 			// only when its QC is not from r-1. Genesis is from round 0, so
 			// any TC here is redundant and the proposal is ill-formed.
 			p := proposal(1, 1, 1)
-			p.LastRoundTC = &TC{Round: 0}
+			p.SetLastRoundTc(makeTC(0))
 			return p
 		}},
 	}
@@ -214,33 +215,33 @@ func TestVerifyProposalRejects(t *testing.T) {
 // no later leader or round check would notice.
 func TestVerifyRejectsForgedCertificate(t *testing.T) {
 	v := newTestVerifier()
-	forged := &QC{VoteInfo: VoteInfo{ID: Hash{0x99}, Round: 40}}
+	forged := bareQC(hashOf(0x99), 40)
 
 	t.Run("on a proposal", func(t *testing.T) {
 		p := proposal(1, 1, 1)
-		p.HighCommitQC = forged
+		p.SetHighCommitQc(forged)
 		if v.VerifyProposal(p) {
 			t.Error("VerifyProposal = true for a proposal carrying a forged commit certificate")
 		}
 	})
 	t.Run("as a block's parent certificate", func(t *testing.T) {
 		b := NewBlock(1, 41, [][]byte{{0xaa}}, forged)
-		p := &ProposalMsg{Block: b, HighCommitQC: genesisQC, Sender: 1, Sig: signAs(1, b.ID())}
+		p := diempb.ProposalMsg_builder{Block: b, HighCommitQc: genesisQC, Sender: 1, Sig: signAs(1, b.GetId())}.Build()
 		if v.VerifyProposal(p) {
 			t.Error("VerifyProposal = true for a block extending a forged certificate")
 		}
 	})
 	t.Run("on a timeout", func(t *testing.T) {
 		m := timeoutFrom(t, 1)
-		m.HighCommitQC = forged
+		m.SetHighCommitQc(forged)
 		if v.VerifyTimeout(m) {
 			t.Error("VerifyTimeout = true for a timeout carrying a forged commit certificate")
 		}
 	})
 	t.Run("on a vote", func(t *testing.T) {
 		p := proposal(1, 1, 1)
-		vote := voteFor(t, 1, p.Block)
-		vote.HighCommitQC = forged
+		vote := voteFor(t, 1, p.GetBlock())
+		vote.SetHighCommitQc(forged)
 		if v.VerifyVote(vote) {
 			t.Error("VerifyVote = true for a vote carrying a forged commit certificate")
 		}
@@ -257,29 +258,29 @@ func TestVerifyRejectsForgedCertificate(t *testing.T) {
 // aggregator fills in with any name it likes.
 func TestVerifyQCRejectsUnattributedAuthor(t *testing.T) {
 	v := newTestVerifier()
-	voteInfo := VoteInfo{ID: GenesisBlock().ID(), Round: 1}
+	vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
 
-	if !v.VerifyQC(makeQC(voteInfo, Hash{}, 1, 2, 3)) {
+	if !v.VerifyQC(makeQC(vi, nil, 1, 2, 3)) {
 		t.Fatal("VerifyQC = false for a quorum its author signed, want true")
 	}
 	if !v.VerifyQC(GenesisQC()) {
 		t.Fatal("VerifyQC = false for genesis, want true: it is trusted, not certified")
 	}
 
-	tamper := map[string]func(*QC){
-		"no author signature at all": func(qc *QC) {
-			qc.AuthorSig = Signature{}
+	tamper := map[string]func(*diempb.QuorumCert){
+		"no author signature at all": func(qc *diempb.QuorumCert) {
+			qc.ClearAuthorSig()
 		},
-		"author signature by someone other than the named author": func(qc *QC) {
-			qc.Author = 2
+		"author signature by someone other than the named author": func(qc *diempb.QuorumCert) {
+			qc.SetAuthor(2)
 		},
-		"author signature covers a different signature set": func(qc *QC) {
-			qc.AuthorSig = signAs(qc.Author, qcSigsDigest(makeQC(voteInfo, Hash{}, 2, 3, 4).Signatures))
+		"author signature covers a different signature set": func(qc *diempb.QuorumCert) {
+			qc.SetAuthorSig(signAs(qc.GetAuthor(), qcSigsDigest(makeQC(vi, nil, 2, 3, 4).GetSignatures())))
 		},
 	}
 	for name, break_ := range tamper {
 		t.Run(name, func(t *testing.T) {
-			qc := makeQC(voteInfo, Hash{}, 1, 2, 3)
+			qc := makeQC(vi, nil, 1, 2, 3)
 			break_(qc)
 			if v.VerifyQC(qc) {
 				t.Error("VerifyQC = true for a certificate no author is bound to")
@@ -290,20 +291,20 @@ func TestVerifyQCRejectsUnattributedAuthor(t *testing.T) {
 
 func TestVerifyVoteRejects(t *testing.T) {
 	v := newTestVerifier()
-	tamper := map[string]func(*VoteMsg){
-		"VoteInfo does not match the hash the signature binds": func(m *VoteMsg) {
-			m.VoteInfo.Round = 9
+	tamper := map[string]func(*diempb.VoteMsg){
+		"VoteInfo does not match the hash the signature binds": func(m *diempb.VoteMsg) {
+			m.GetVoteInfo().SetRound(9)
 		},
-		"signature is by someone other than the sender": func(m *VoteMsg) {
-			m.Sender = 4
+		"signature is by someone other than the sender": func(m *diempb.VoteMsg) {
+			m.SetSender(4)
 		},
-		"signature covers something other than the ledger commit info": func(m *VoteMsg) {
-			m.Sig = signAs(m.Sender, Hash{0xff})
+		"signature covers something other than the ledger commit info": func(m *diempb.VoteMsg) {
+			m.SetSig(signAs(m.GetSender(), hashOf(0xff)))
 		},
 	}
 	for name, break_ := range tamper {
 		t.Run(name, func(t *testing.T) {
-			m := voteFor(t, 1, proposal(1, 1, 1).Block)
+			m := voteFor(t, 1, proposal(1, 1, 1).GetBlock())
 			break_(m)
 			if v.VerifyVote(m) {
 				t.Error("VerifyVote = true for a vote that should have been dropped")
@@ -314,15 +315,15 @@ func TestVerifyVoteRejects(t *testing.T) {
 
 func TestVerifyTimeoutRejects(t *testing.T) {
 	v := newTestVerifier()
-	tamper := map[string]func(*TimeoutMsg){
-		"signature is by someone other than the sender": func(m *TimeoutMsg) {
-			m.TmoInfo.Sender = 4
+	tamper := map[string]func(*diempb.TimeoutMsg){
+		"signature is by someone other than the sender": func(m *diempb.TimeoutMsg) {
+			m.GetTmoInfo().SetSender(4)
 		},
-		"signature covers a different round": func(m *TimeoutMsg) {
-			m.TmoInfo.Sig = signAs(m.TmoInfo.Sender, TimeoutDigest(9, 0))
+		"signature covers a different round": func(m *diempb.TimeoutMsg) {
+			m.GetTmoInfo().SetSig(signAs(m.GetTmoInfo().GetSender(), TimeoutDigest(9, 0)))
 		},
-		"high QC is forged": func(m *TimeoutMsg) {
-			m.TmoInfo.HighQC = &QC{VoteInfo: VoteInfo{ID: Hash{0x99}, Round: 5}}
+		"high QC is forged": func(m *diempb.TimeoutMsg) {
+			m.GetTmoInfo().SetHighQc(bareQC(hashOf(0x99), 5))
 		},
 	}
 	for name, break_ := range tamper {
@@ -334,4 +335,194 @@ func TestVerifyTimeoutRejects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func tcVote(highQCRound uint64, sig *diempb.Signature) *diempb.TimeoutVote {
+	return diempb.TimeoutVote_builder{HighQcRound: highQCRound, Sig: sig}.Build()
+}
+
+func tcOf(round uint64, votes ...*diempb.TimeoutVote) *diempb.TimeoutCert {
+	return diempb.TimeoutCert_builder{Round: round, Votes: votes}.Build()
+}
+
+// TestVerifyRejectsMalformed covers what arrives from a peer that builds its
+// messages by hand: absent parts, hashes of the wrong length, a block id that
+// is not the digest of its fields. Every hash field of a message the Verifier
+// accepts is exactly hashLen bytes, which is what lets the core read them
+// without checking.
+func TestVerifyRejectsMalformed(t *testing.T) {
+	v := newTestVerifier()
+	short := []byte{1, 2, 3}
+
+	// A vote whose own fields are broken, re-signed so that only the field
+	// under test is wrong.
+	reVote := func(vi *diempb.VoteInfo, commit *diempb.LedgerCommitInfo) *diempb.VoteMsg {
+		return diempb.VoteMsg_builder{
+			VoteInfo: vi, LedgerCommitInfo: commit, Sender: 1,
+			Sig: signAs(1, LedgerCommitDigest(commit)),
+		}.Build()
+	}
+	good := voteInfo(hashOf(1), 1, GenesisBlock().GetId(), 0)
+	withInfo := func(mut func(*diempb.VoteInfo)) *diempb.VoteMsg {
+		vi := proto.Clone(good).(*diempb.VoteInfo)
+		mut(vi)
+		return reVote(vi, commitInfo(nil, vi))
+	}
+	withCommit := func(mut func(*diempb.LedgerCommitInfo)) *diempb.VoteMsg {
+		c := commitInfo(nil, good)
+		mut(c)
+		return reVote(good, c)
+	}
+	if !v.VerifyVote(reVote(good, commitInfo(nil, good))) {
+		t.Fatal("setup: the control vote must verify")
+	}
+
+	votes := map[string]*diempb.VoteMsg{
+		"nil vote":                   nil,
+		"vote without vote info":     reVote(nil, commitInfo(nil, good)),
+		"vote without commit info":   reVote(good, nil),
+		"vote without a signature":   diempb.VoteMsg_builder{VoteInfo: good, LedgerCommitInfo: commitInfo(nil, good), Sender: 1}.Build(),
+		"vote sender 0":              diempb.VoteMsg_builder{VoteInfo: good, LedgerCommitInfo: commitInfo(nil, good), Sig: signAs(0, hashOf())}.Build(),
+		"short vote info id":         withInfo(func(vi *diempb.VoteInfo) { vi.SetId(short) }),
+		"short vote info parent id":  withInfo(func(vi *diempb.VoteInfo) { vi.SetParentId(short) }),
+		"short vote info exec state": withInfo(func(vi *diempb.VoteInfo) { vi.SetExecStateId(short) }),
+		"short commit state id":      withCommit(func(c *diempb.LedgerCommitInfo) { c.SetCommitStateId(short) }),
+		"short vote info hash":       withCommit(func(c *diempb.LedgerCommitInfo) { c.SetVoteInfoHash(short) }),
+		"long commit state id":       withCommit(func(c *diempb.LedgerCommitInfo) { c.SetCommitStateId(append(hashOf(), 0)) }),
+	}
+	for name, m := range votes {
+		t.Run(name, func(t *testing.T) {
+			if v.VerifyVote(m) {
+				t.Error("VerifyVote = true for a malformed vote")
+			}
+		})
+	}
+
+	t.Run("nil quorum cert", func(t *testing.T) {
+		if v.VerifyQC(nil) {
+			t.Error("VerifyQC(nil) = true")
+		}
+	})
+	t.Run("quorum cert without vote or commit info", func(t *testing.T) {
+		if v.VerifyQC(diempb.QuorumCert_builder{}.Build()) {
+			t.Error("VerifyQC = true for an empty certificate")
+		}
+	})
+	t.Run("genesis certificate with a short hash", func(t *testing.T) {
+		qc := proto.Clone(GenesisQC()).(*diempb.QuorumCert)
+		qc.GetVoteInfo().SetParentId(short)
+		if v.VerifyQC(qc) {
+			t.Error("VerifyQC = true for genesis with a short parent id")
+		}
+	})
+	t.Run("quorum cert with a short hash", func(t *testing.T) {
+		qc := makeQC(voteInfo(GenesisBlock().GetId(), 1, nil, 0), nil, 1, 2, 3)
+		qc.GetVoteInfo().SetExecStateId(short)
+		if v.VerifyQC(qc) {
+			t.Error("VerifyQC = true for a certificate with a short exec state id")
+		}
+	})
+	t.Run("quorum cert with a nil signature", func(t *testing.T) {
+		qc := makeQC(voteInfo(GenesisBlock().GetId(), 1, nil, 0), nil, 1, 2, 3)
+		qc.SetSignatures(append(qc.GetSignatures()[:2:2], nil))
+		if v.VerifyQC(qc) {
+			t.Error("VerifyQC = true with a nil signature in the set")
+		}
+	})
+	t.Run("timeout cert with a nil vote", func(t *testing.T) {
+		if v.VerifyTC(tcOf(5, nil, nil, nil)) {
+			t.Error("VerifyTC = true for nil votes")
+		}
+	})
+
+	t.Run("nil proposal", func(t *testing.T) {
+		if v.VerifyProposal(nil) {
+			t.Error("VerifyProposal(nil) = true")
+		}
+	})
+	t.Run("proposal without a block", func(t *testing.T) {
+		if v.VerifyProposal(diempb.ProposalMsg_builder{Sender: 1, Sig: signAs(1, hashOf())}.Build()) {
+			t.Error("VerifyProposal = true without a block")
+		}
+	})
+	t.Run("block without a qc", func(t *testing.T) {
+		b := diempb.Block_builder{Author: 1, Round: 1}.Build()
+		b.SetId(blockID(1, 1, nil, nil))
+		p := diempb.ProposalMsg_builder{Block: b, Sender: 1, Sig: signAs(1, b.GetId())}.Build()
+		if v.VerifyProposal(p) {
+			t.Error("VerifyProposal = true for a block without a qc")
+		}
+	})
+	t.Run("proposal without a signature", func(t *testing.T) {
+		p := proposal(1, 1, 1)
+		p.ClearSig()
+		if v.VerifyProposal(p) {
+			t.Error("VerifyProposal = true without a signature")
+		}
+	})
+	t.Run("proposal sender 0", func(t *testing.T) {
+		p := proposal(1, 1, 1)
+		p.SetSender(0)
+		p.SetSig(signAs(0, p.GetBlock().GetId()))
+		if v.VerifyProposal(p) {
+			t.Error("VerifyProposal = true for sender 0")
+		}
+	})
+	t.Run("proposal with a malformed commit qc", func(t *testing.T) {
+		p := proposal(1, 1, 1)
+		p.SetHighCommitQc(diempb.QuorumCert_builder{}.Build())
+		if v.VerifyProposal(p) {
+			t.Error("VerifyProposal = true with an empty commit certificate")
+		}
+	})
+
+	// The id is a claim like every other digest on the wire: a proposal
+	// carrying a different one, correctly signed, must still be dropped.
+	t.Run("block id that is not the digest of its fields", func(t *testing.T) {
+		p := proposal(1, 1, 1)
+		p.GetBlock().SetId(hashOf(0xee))
+		p.SetSig(signAs(1, p.GetBlock().GetId()))
+		if v.VerifyProposal(p) {
+			t.Error("VerifyProposal = true for a block whose id is not recomputed from its fields")
+		}
+	})
+	t.Run("block without an id", func(t *testing.T) {
+		p := proposal(1, 1, 1)
+		p.GetBlock().SetId(nil)
+		if v.VerifyProposal(p) {
+			t.Error("VerifyProposal = true for a block with no id")
+		}
+	})
+	t.Run("block id over a tampered payload", func(t *testing.T) {
+		p := proposal(1, 1, 1)
+		p.GetBlock().SetPayload([][]byte{{0xbb}})
+		if v.VerifyProposal(p) {
+			t.Error("VerifyProposal = true for a payload the id does not cover")
+		}
+	})
+
+	t.Run("nil timeout", func(t *testing.T) {
+		if v.VerifyTimeout(nil) {
+			t.Error("VerifyTimeout(nil) = true")
+		}
+	})
+	t.Run("timeout without tmo info", func(t *testing.T) {
+		if v.VerifyTimeout(diempb.TimeoutMsg_builder{}.Build()) {
+			t.Error("VerifyTimeout = true without timeout info")
+		}
+	})
+	t.Run("timeout without a high qc", func(t *testing.T) {
+		m := timeoutFrom(t, 1)
+		m.GetTmoInfo().ClearHighQc()
+		if v.VerifyTimeout(m) {
+			t.Error("VerifyTimeout = true without a high qc")
+		}
+	})
+	t.Run("timeout without a signature", func(t *testing.T) {
+		m := timeoutFrom(t, 1)
+		m.GetTmoInfo().ClearSig()
+		if v.VerifyTimeout(m) {
+			t.Error("VerifyTimeout = true without a signature")
+		}
+	})
 }
