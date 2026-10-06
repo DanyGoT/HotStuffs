@@ -29,11 +29,14 @@ race:
 	go test -race ./...
 
 # The dependency direction, enforced mechanically rather than by discipline.
+# A dot in the first path element means a domain, i.e. not stdlib.
+DOMAIN := ^[^/]*\.
+DIEM_OK := ^google.golang.org/protobuf/\|^github.com/DanyGoT/HotStuffs/proto/diempb$$
+
 check-deps:
-	@# a dot in the first path element means a domain, i.e. not stdlib
-	@! go list -f '{{join .Deps "\n"}}' ./diem | grep -q '^[^/]*\.'
-	@! grep -rq --include='*.go' 'diempb\|relab/gorums' diem crypto
-	@! go list -deps ./proto/diempb | grep -q 'relab/gorums\|google.golang.org/grpc'
+	@! go list -f '{{join .Deps "\n"}}' ./diem | grep '$(DOMAIN)' | grep -v '$(DIEM_OK)' | grep .
+	@! go list -f '{{join .Deps "\n"}}' ./crypto | grep '$(DOMAIN)' | grep .
+	@! go list -deps ./proto/diempb | grep 'relab/gorums\|google.golang.org/grpc' | grep .
 	@! grep -rEq --include='*.go' '^[[:space:]]*go ' diem
 	@! grep -rq --include='*.go' 'reflect\.' $(GO_DIRS)
 	@echo "check-deps: ok"
