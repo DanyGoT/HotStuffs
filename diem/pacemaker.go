@@ -186,6 +186,9 @@ func (p *Pacemaker) AdvanceRoundQC(qc *diempb.QuorumCert) bool {
 
 // Backoff is the round timer's duration: it grows by a factor on every
 // consecutive timeout, capped at max, and resets when a round succeeds.
+// DiemBFT 3.5 get_round_timer gives 4Δ or α+β·commit_gap instead; growth stands
+// in for a configured Δ, so liveness (Lemma 8) needs max above a round's time
+// after GST.
 type Backoff struct {
 	base, max time.Duration
 	factor    float64
