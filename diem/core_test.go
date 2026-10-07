@@ -246,3 +246,14 @@ func TestCoreBoundsVoteAccumulation(t *testing.T) {
 		t.Errorf("%d vote buckets after %d fabricated rounds, want at most %d", got, votes, want)
 	}
 }
+
+func TestNewRejectsHistoryShorterThanReputationWalk(t *testing.T) {
+	ledger := NewMemLedger()
+	ledger.History = defaultWindowSize
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New accepted a ledger that forgets blocks the reputation walk reads")
+		}
+	}()
+	New(Config{ID: 1, Validators: []uint32{1, 2, 3, 4}, Ledger: ledger})
+}

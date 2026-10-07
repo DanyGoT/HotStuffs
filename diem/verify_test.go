@@ -118,6 +118,17 @@ func TestVerifyQC(t *testing.T) {
 		}
 	})
 
+	t.Run("commit over a round gap is rejected", func(t *testing.T) {
+		vi := voteInfo(hashOf(2), 3, GenesisBlock().GetId(), 1)
+		if v.VerifyQC(makeQC(vi, hashOf(9), 1, 2, 3)) {
+			t.Error("VerifyQC = true for a commit whose block does not directly follow its parent")
+		}
+		vi = voteInfo(hashOf(2), 2, GenesisBlock().GetId(), 1)
+		if !v.VerifyQC(makeQC(vi, hashOf(9), 1, 2, 3)) {
+			t.Error("VerifyQC = false for a 2-chain commit, want true")
+		}
+	})
+
 	t.Run("too few signatures is rejected", func(t *testing.T) {
 		vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
 		qc := makeQC(vi, nil, 1, 2) // quorum is 3
