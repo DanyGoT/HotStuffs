@@ -83,8 +83,8 @@ Each replica prints how many blocks it committed; the =-local= runs also check
 that every replica's log agrees over the prefix they share.
 
 =make test= runs everything, =make race= under the race detector, and
-=make check-deps= enforces the layering rules below. =make proto= regenerates
-the protobuf and needs =nix develop= for =protoc=.
+=make check-deps= enforces the one structural rule below. =make proto=
+regenerates the protobuf and needs =nix develop= for =protoc=.
 
 * Codebase Map
 
@@ -103,18 +103,10 @@ The file-by-file tour, and where the protocol itself lives, is in
 =diem/README.org=. =diem/PSEUDOCODE.org= maps each procedure of the paper onto
 the code.
 
-** The layering rule
+** The single-goroutine rule
 
-=make check-deps= enforces four things:
-
-1. =diem= imports the standard library, protobuf, gRPC, Gorums and =diempb=
-   only.
-2. =crypto= imports the standard library only.
-3. =diem= contains no =go= statement — the protocol core does not spawn
-   goroutines.
-4. No package uses =reflect=.
-
-The practical effect is that the whole protocol runs in the deterministic
+=make check-deps= fails if =diem= contains a =go= statement: the protocol core
+does not spawn goroutines, so it needs no locks. The practical effect is that the whole protocol runs in the deterministic
 harness in =diem/sim_test.go=, with no network in sight.
 
 * Reading Materials / Related Work
