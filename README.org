@@ -106,8 +106,9 @@ the code.
 ** The single-goroutine rule
 
 =make check-deps= fails if =diem= contains a =go= statement: the protocol core
-does not spawn goroutines, so it needs no locks. The practical effect is that the whole protocol runs in the deterministic
-harness in =diem/sim_test.go=, with no network in sight.
+does not spawn goroutines, so it needs no locks. The practical effect is that
+the whole protocol runs in the deterministic harness in =diem/sim_test.go=,
+with no network in sight.
 
 * Reading Materials / Related Work
 
