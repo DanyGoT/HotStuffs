@@ -1,0 +1,121 @@
+#+title: Requirements from the papers
+
+Terse restatement of what the DiemBFT proofs need. Code pointers are
+=file.go:Func= in =diem/=. "Honest" = non-Byzantine for the quorum arguments.
+
+* 1. Model and assumptions
+- n >= 3f+1, at most f Byzantine; quorum = 2f+1 (=quorum.go:QuorumSize=, =Faulty=).
+- Any two quorums share >= 1 honest validator; any quorum holds >= f+1 honest.
+- Signatures unforgeable; hashes collision-resistant; private key lives only in Safety
+  (=safety.go:Safety=).
+- Partial synchrony: after unknown GST every message arrives within \Delta.
+- Reliable-enough links after GST; honest timers expire finitely.
+- Honest replicas discard non-well-formed messages and only send well-formed ones.
+- Honest replicas vote at most once per round and never lower their counters.
+- Commit info is only trusted through a QC (2f+1 signatures), never a single replica.
+
+* 2. DiemBFT v4 (2-chain; the protocol this code implements)
+** Definitions
+- Def 1 global direct-commit: B is globally direct-committed iff f+1 honest
+  replicas =make_vote= on some B' in round B.round+1 with B'.qc certifying B
+  (setting highest_qc_round = B.round).
+- Def 2 local direct-commit: replica calls =Ledger.commit(B)= only on
+  B <- QC_B <- B' <- QC_B' with B'.round = B.round+1
+  (=blocktree.go:ProcessQC=, =types.go:Commits=, =safety.go:commitStateIDCandidate=).
+** Safety (Agreement)
+- Lemma 1: local direct-commit => global direct-commit.
+- Lemma 2: if B is globally direct-committed, every TC of a higher round has
+  max(tmo_high_qc_rounds) >= B.round.
+- Property 1: at most one block is certified per round (one vote per round per honest
+  replica + quorum intersection).
+- Lemma 3: if B is globally direct-committed, every certified B' with
+  B'.round >= B.round extends B.
+- Property 2: any two globally direct-committed blocks are on one chain => committed
+  prefixes never conflict.
+** Liveness
+- Lemma 4: honest replica in round < r receiving a well-formed proposal or timeout
+  for round r from an honest sender enters round r
+  (=pacemaker.go:AdvanceRoundQC=, =AdvanceRoundTC=).
+- Lemma 5: if QCs form in all rounds > r, infinitely many rounds > r have honest
+  elected leaders.
+- Lemma 6: with finite timeouts and delays, honest replicas enter ever-increasing rounds.
+- Property 3 (liveness): after GST every honest replica eventually commits a block of
+  a round > r.
+- Lemma 7: honest leader's proposal in a round with no QC and no honest timeout =>
+  =make_vote= returns a vote (not nil).
+- Lemma 8: all honest agree on honest leader of r, r after GST => all enter r within 2\Delta.
+- Lemma 9: honest agreed leaders for r, r+1 after GST => B_r globally direct-committed
+  within 5\Delta of first honest entry.
+- Property 4: honest agreed leaders for r, r+1, r+2 after GST => every honest replica
+  locally direct-commits B_r within 7\Delta.
+- Lemma 10-12, Theorem 13, Cor 1: chain quality; honest block within
+  O(f log f) commits, with exclude_size in [f, 2f].
+- Lemma 14, Cor 2, Property 5: crash leaders cost O(t * max(window, f)) rounds
+  (t-leader-utilization).
+- Requirements: leader reputation must be a pure function of committed history,
+  disagreement on leaders only a bounded number of times after GST.
+** Protocol rules the proofs rely on
+| Rule | Statement | Code |
+|------+-----------+------|
+| safe_to_vote | block.round > max(highest_vote_round, qc_round) and (consecutive(block.round, qc_round) or safe_to_extend) | =safety.go:safeToVote= |
+| safe_to_extend | consecutive(block.round, tc.round) and qc_round >= max(tc.tmo_high_qc_rounds) | =safety.go:safeToExtend= |
+| safe_to_timeout | qc_round >= highest_qc_round; round > max(highest_vote_round-1, qc_round); consecutive(round, qc_round) or consecutive(round, tc.round) | =safety.go:safeToTimeout= |
+| vote counters | highest_vote_round raised on vote and on timeout; highest_qc_round raised on vote; both monotone non-decreasing | =safety.go:increaseHighestVoteRound=, =updateHighestQCRound=, =MakeVote=, =MakeTimeout= |
+| timeout burns round | after timing out of r, no vote in r (needed by Lemma 2) | =safety.go:MakeTimeout= |
+| 2-chain commit | commit_state_id != nil only when block.round = qc.round+1; QC commits its parent | =safety.go:commitStateIDCandidate=, =blocktree.go:ProcessQC= |
+| well-formedness | round-r proposal/timeout carries TC(r-1) iff qc.round != r-1 | =types.go:wellFormed=, =verify.go:VerifyProposal=, =VerifyTimeout= |
+| block extends lower round | block.qc.round < block.round | =verify.go:VerifyProposal=, =safety.go:safeToVote= |
+| QC validity | >= 2f+1 distinct valid signers over the LedgerCommitInfo; author signature | =verify.go:VerifyQC=, =verifyCert=, =quorum.go:QuorumReached= |
+| TC validity | >= 2f+1 distinct signers, each over (round, own high_qc_round) | =verify.go:VerifyTC= |
+| Safety re-verifies | QC and TC re-checked before signing | =safety.go:validSignatures= |
+| one vote per signer/round | duplicate votes cannot reach a quorum | =blocktree.go:ProcessVote= |
+| proposer is leader | proposal round = current round, sender = author = leader | =core.go:processProposalMsg= |
+| vote to next leader | vote unicast to leader of r+1 | =core.go:processProposalMsg= |
+| leader extends high_qc | block built over highest QC, which absorbs every received timeout's high_qc | =blocktree.go:GenerateBlock=, =core.go:processTimeoutMsg= |
+| round entry | enter qc.round+1 / tc.round+1, never backwards | =pacemaker.go:AdvanceRoundQC=, =AdvanceRoundTC= |
+| Bracha amplification | f+1 timeouts for r => time out of r; 2f+1 => TC | =pacemaker.go:ProcessRemoteTimeout= |
+| timer | grows on consecutive timeouts, resets on QC | =pacemaker.go:Backoff= |
+| leader election | reputation path only on fresh 2-chain QC; else round-robin, two rounds per leader | =leader.go:UpdateLeaders=, =GetLeader=, =electReputationLeader= |
+| deterministic ledger | speculate/commit deterministic; commit prunes forks below | =ledger.go:Speculate=, =Commit= |
+
+* 3. HotStuff (PODC'19): 3-chain basic/chained, which DiemBFT generalises
+Not implemented here (we commit on a 2-chain); kept for the proof structure.
+- Lemma 1: two valid QCs of the same type on conflicting nodes have different views
+  (one vote per phase per view). Counterpart: DiemBFT Property 1.
+- Theorem 2 (safety): conflicting nodes cannot both be committed by correct replicas.
+  Counterpart: DiemBFT Property 2. Proof uses the lock (=lockedQC=) and =safeNode=:
+  vote only if node extends lockedQC.node, or justify.view > lockedQC.view. DiemBFT
+  replaces lock with highest_vote_round / highest_qc_round plus the TC rule.
+- Lemma 3: a correct replica locked on precommitQC implies f+1 correct replicas voted
+  for the matching prepareQC. Counterpart: DiemBFT Lemma 2 (via tmo_high_qc_rounds).
+- Theorem 4 (liveness): after GST, bounded T_f, all correct replicas in view v with a
+  correct leader => decision. Optimistic responsiveness: no wait-for-\Delta step.
+  Counterpart: DiemBFT Lemma 9, Property 3, 4.
+- Theorem 5 (chained HotStuff safety): conflicting nodes cannot both be committed via
+  a three-chain. Counterpart: DiemBFT Lemma 3, Property 2; uses the 3-chain commit
+  rule, so not applicable to our 2-chain code.
+- Lemma 6-7, Theorem 8 (appendix): same-height conflicting nodes lack two valid QCs;
+  commit order is consistent; derive state-machine safety. 3-chain specific.
+- Doesn't apply: lock/precommit/commit phases, view-change messages, three-chain commit;
+  HotStuff has no TC or reputation scheme. The "livelessness with two phases" argument is
+  the one DiemBFT answers with the TC condition.
+
+* Gaps / unverified
+- No persistence: =highest_vote_round= / =highest_qc_round= are in memory only, so a
+  restart can violate Lemma 2 and Property 1 (paper: =save_consensus_state=;
+  =pacemaker.go:LocalTimeoutRound= notes the omission).
+- No block-sync: =safety.go:MakeVote= declines when an ancestor was never speculated
+  (=DeclinedMissingAncestor=), so Lemma 7 (honest leader's proposal gets a vote) and the
+  Lemma 9 / Property 4 timing bounds do not hold under reordering or loss.
+- =QuorumSize= is ceil((n+f+1)/2), equal to 2f+1 only when n = 3f+1; for other n it
+  is above it, safe but not what the paper's liveness counts assume.
+- Genesis QC is trusted by id only (=verify.go:VerifyQC=), by design.
+- Commit info in a QC is not rechecked as 2-chain (block.round = qc.round+1) by the
+  receiver; it rests on >= f+1 honest voters following =commitStateIDCandidate=.
+- Leader election: exclude_size in [f, 2f] and window_size large enough that
+  active \ last_authors is non-empty are config assumptions; the code falls back to
+  round-robin on an empty difference rather than enforcing them
+  (=leader.go:electReputationLeader=, =core.go:New= defaults).
+- Lemma 7 / Lemma 8 rely on the vote-lead bound (=core.go:maxRoundLead=) and
+  dropping of timeouts for past rounds not discarding messages an honest peer needs;
+  not argued in the paper.
