@@ -1,131 +1,38 @@
 #+title: HotStuff
 
+DiemBFT v4 in Go, over Gorums. DiemBFT is a variant of HotStuff that commits
+on two consecutive rounds instead of three. The code follows the pseudocode in
+section 3 of the paper.
 
-
-
-
-
-https://typst.app/
-TikZ -> lage graf i latex
-https://www.overleaf.com/learn/latex/TikZ_package
-
-
-
-
-
-* Overview
-
-A Byzantine fault-tolerant consensus protocol in Go — DiemBFT v4, the
-pipelined two-chain descendant of HotStuff — built from the paper's pseudocode
-rather than ported from an existing implementation, talking over [[4][Gorums]].
-
-A group of =n= replicas agrees on an ever-growing log of commands, and keeps
-agreeing while up to =f= of them are crashed, slow, or actively lying, where
-=n = 3f + 1=. Four replicas tolerate one liar.
-
-** What a replica does, in a loop
-
-#+begin_example
-  the leader of this round bundles commands into a block and broadcasts it
-      |
-  everyone checks the block and votes for it, if their safety rules allow
-      |
-  the next leader collects a quorum of votes into a certificate (a QC)
-      |
-  a QC over two rounds in a row means the older block can never be undone
-      |
-  -> commit it, and the round advances
-#+end_example
-
-If a round produces no block — a crashed or silent leader — replicas time out,
-and a quorum of timeouts forms a *timeout certificate* that lets the next
-leader carry on without the missing round.
-
-** How a message travels
-
-The path from the network to the protocol and back is deliberately short:
-
-#+begin_example
-  gRPC/Gorums -> VERIFY -> queue -> Core.Step -> Transport -> out
-                            |                    |
-                  every signature checked   pure state machine:
-                  here, on the handler      one goroutine, no locks,
-                  goroutine. Anything       no network
-                  that fails is dropped
-                  and never reaches Core.
-#+end_example
-
-The rule is *authenticate at the edge, authorise by state in the loop*. By the
-time a message reaches =Core=, it is known to be genuinely signed; =Core= only
-decides whether it is welcome given what the replica currently believes.
-
-** Running it
-
-Four replicas in one process for ten seconds:
+* Running
 
 #+begin_src sh
-go run ./cmd/diem -local 4 -time 10s -payload 32 -workers 4
+go run ./cmd/diem -local 4 -time 10s
 #+end_src
 
-Four separate processes over TCP — the same code path, one per terminal, after
-writing a key pair per replica:
+This runs four replicas in one process for ten seconds and prints how many
+blocks each one committed. =-h= lists the other flags, including the ones for
+running one replica per process.
 
-#+begin_src sh
-go run ./cmd/diem -gen-keys -keys ./keys \
-  -remotes 127.0.0.1:20001,127.0.0.1:20002,127.0.0.1:20003,127.0.0.1:20004
+=make test= runs the tests. =make proto= regenerates the protobuf code and
+needs =nix develop=.
 
-go run ./cmd/diem -self 127.0.0.1:20001 \
-  -remotes 127.0.0.1:20001,127.0.0.1:20002,127.0.0.1:20003,127.0.0.1:20004 \
-  -keys ./keys -time 15s
-#+end_src
+* Code
 
-Each replica prints how many blocks it committed; the =-local= runs also check
-that every replica's log agrees over the prefix they share.
+- =diem/= is the protocol. It has no networking and runs on one goroutine.
+- =diemnet/= sends and receives its messages over Gorums.
+- =proto/diempb/= defines the messages.
+- =crypto/= signs and verifies them.
+- =replica/= puts the pieces together into a running replica.
+- =cmd/diem/= is the program.
+- =scripts/= runs benchmarks on the UiS machines.
 
-=make test= runs everything, =make race= under the race detector, and
-=make check-deps= enforces the one structural rule below. =make proto=
-regenerates the protobuf and needs =nix develop= for =protoc=.
+=diem/README.org= explains the protocol code in more detail.
 
-* Codebase Map
+* Papers
 
-#+begin_example
-diem/           the protocol, one file per module of the paper's section 3
-diemnet/        the Gorums transport: outbound calls, inbound handlers.
-                The only package besides replica that calls Gorums
-proto/diempb/   the wire messages and the Gorums service; *.pb.go is generated
-crypto/         ECDSA P-256 signing over plain bytes, and PEM key files
-replica/        wires Core + Loop + Transport and owns the lifecycle;
-                payload.go is the synthetic workload
-cmd/diem/       flags; a -local cluster or one -self/-remotes replica
-#+end_example
-
-The file-by-file tour, and where the protocol itself lives, is in
-=diem/README.org=. =diem/PSEUDOCODE.org= maps each procedure of the paper onto
-the code.
-
-** The single-goroutine rule
-
-=make check-deps= fails if =diem= contains a =go= statement: the protocol core
-does not spawn goroutines, so it needs no locks. The practical effect is that
-the whole protocol runs in the deterministic harness in =diem/sim_test.go=,
-with no network in sight.
-
-* Reading Materials / Related Work
-
-- [[1][Gorums paper]]
-- [[2][HotStuff: BFT Consensus in the Lens of Blockchain]] "Teori med implementasjon"
-- [[3][Relab HotStuff framework]]
-- [[4][Gorums source code]]
-- [[5][Making BFT Protocols Really Robust with Twins]] - "litt på siden, implementert i
-  relab hotstuffs" - Se på å potensielt porte fra relab hotstuffs til meg selv,
-  stretch goal.
-- [[6][DiemBFT v4: State Machine Replication in the Diem Blockchain]] -
-  "Implementasjon, se på denne som baseline?"
--
-
-#+LINK: 1 https://ieeexplore.ieee.org/document/7980198
-#+LINK: 2 https://arxiv.org/abs/1803.05069
-#+LINK: 3 https://github.com/relab/hotstuff
-#+LINK: 4 https://github.com/relab/gorums
-#+LINK: 5 https://malkhi.com/posts/2020/04/making-BFT-systems-robust/
-#+LINK: 6 https://developers.diem.com/papers/diem-consensus-state-machine-replication-in-the-diem-blockchain/2021-08-17.pdf
+- [[https://developers.diem.com/papers/diem-consensus-state-machine-replication-in-the-diem-blockchain/2021-08-17.pdf][DiemBFT v4: State Machine Replication in the Diem Blockchain]]
+- [[https://arxiv.org/abs/1803.05069][HotStuff: BFT Consensus in the Lens of Blockchain]]
+- [[https://ieeexplore.ieee.org/document/7980198][Gorums]]
+- [[https://github.com/relab/hotstuff][relab/hotstuff]]
+- [[https://malkhi.com/posts/2020/04/making-BFT-systems-robust/][Making BFT Protocols Really Robust with Twins]]
