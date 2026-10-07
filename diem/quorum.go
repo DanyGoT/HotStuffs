@@ -6,6 +6,8 @@ import "github.com/DanyGoT/HotStuffs/proto/diempb"
 func Faulty(n int) int { return (n - 1) / 3 }
 
 // QuorumSize is the number of votes a certificate needs: ceil((n+f+1)/2).
+// DiemBFT assumes n = 3f+1 and a quorum of 2f+1, which this equals there; for
+// other n it is the smallest size at which any two quorums still share f+1.
 func QuorumSize(n int) int { return (n + Faulty(n) + 2) / 2 }
 
 // verifySig reports whether sig is a valid signature over digest by the signer
