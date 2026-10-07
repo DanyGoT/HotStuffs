@@ -7,8 +7,10 @@
 package diempb
 
 import (
+	_ "github.com/relab/gorums"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	reflect "reflect"
 	unsafe "unsafe"
 )
@@ -1296,7 +1298,7 @@ var File_proto_diempb_diem_proto protoreflect.FileDescriptor
 
 const file_proto_diempb_diem_proto_rawDesc = "" +
 	"\n" +
-	"\x17proto/diempb/diem.proto\x12\x06diempb\"5\n" +
+	"\x17proto/diempb/diem.proto\x12\x06diempb\x1a\fgorums.proto\x1a\x1bgoogle/protobuf/empty.proto\"5\n" +
 	"\tSignature\x12\x16\n" +
 	"\x06signer\x18\x01 \x01(\rR\x06signer\x12\x10\n" +
 	"\x03sig\x18\x02 \x01(\fR\x03sig\"\x94\x01\n" +
@@ -1352,7 +1354,11 @@ const file_proto_diempb_diem_proto_rawDesc = "" +
 	"TimeoutMsg\x12.\n" +
 	"\btmo_info\x18\x01 \x01(\v2\x13.diempb.TimeoutInfoR\atmoInfo\x127\n" +
 	"\rlast_round_tc\x18\x02 \x01(\v2\x13.diempb.TimeoutCertR\vlastRoundTc\x128\n" +
-	"\x0ehigh_commit_qc\x18\x03 \x01(\v2\x12.diempb.QuorumCertR\fhighCommitQcB0Z)github.com/DanyGoT/HotStuffs/proto/diempb\x92\x03\x02\b\x02b\beditionsp\xe9\a"
+	"\x0ehigh_commit_qc\x18\x03 \x01(\v2\x12.diempb.QuorumCertR\fhighCommitQc2\xb9\x01\n" +
+	"\x04Diem\x12=\n" +
+	"\bProposal\x12\x13.diempb.ProposalMsg\x1a\x16.google.protobuf.Empty\"\x04\x98\xb5\x18\x01\x125\n" +
+	"\x04Vote\x12\x0f.diempb.VoteMsg\x1a\x16.google.protobuf.Empty\"\x04\x90\xb5\x18\x01\x12;\n" +
+	"\aTimeout\x12\x12.diempb.TimeoutMsg\x1a\x16.google.protobuf.Empty\"\x04\x98\xb5\x18\x01B0Z)github.com/DanyGoT/HotStuffs/proto/diempb\x92\x03\x02\b\x02b\beditionsp\xe9\a"
 
 var file_proto_diempb_diem_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_proto_diempb_diem_proto_goTypes = []any{
@@ -1367,6 +1373,7 @@ var file_proto_diempb_diem_proto_goTypes = []any{
 	(*VoteMsg)(nil),          // 8: diempb.VoteMsg
 	(*TimeoutInfo)(nil),      // 9: diempb.TimeoutInfo
 	(*TimeoutMsg)(nil),       // 10: diempb.TimeoutMsg
+	(*emptypb.Empty)(nil),    // 11: google.protobuf.Empty
 }
 var file_proto_diempb_diem_proto_depIdxs = []int32{
 	1,  // 0: diempb.QuorumCert.vote_info:type_name -> diempb.VoteInfo
@@ -1389,8 +1396,14 @@ var file_proto_diempb_diem_proto_depIdxs = []int32{
 	9,  // 17: diempb.TimeoutMsg.tmo_info:type_name -> diempb.TimeoutInfo
 	5,  // 18: diempb.TimeoutMsg.last_round_tc:type_name -> diempb.TimeoutCert
 	3,  // 19: diempb.TimeoutMsg.high_commit_qc:type_name -> diempb.QuorumCert
-	20, // [20:20] is the sub-list for method output_type
-	20, // [20:20] is the sub-list for method input_type
+	7,  // 20: diempb.Diem.Proposal:input_type -> diempb.ProposalMsg
+	8,  // 21: diempb.Diem.Vote:input_type -> diempb.VoteMsg
+	10, // 22: diempb.Diem.Timeout:input_type -> diempb.TimeoutMsg
+	11, // 23: diempb.Diem.Proposal:output_type -> google.protobuf.Empty
+	11, // 24: diempb.Diem.Vote:output_type -> google.protobuf.Empty
+	11, // 25: diempb.Diem.Timeout:output_type -> google.protobuf.Empty
+	23, // [23:26] is the sub-list for method output_type
+	20, // [20:23] is the sub-list for method input_type
 	20, // [20:20] is the sub-list for extension type_name
 	20, // [20:20] is the sub-list for extension extendee
 	0,  // [0:20] is the sub-list for field type_name
@@ -1409,7 +1422,7 @@ func file_proto_diempb_diem_proto_init() {
 			NumEnums:      0,
 			NumMessages:   11,
 			NumExtensions: 0,
-			NumServices:   0,
+			NumServices:   1,
 		},
 		GoTypes:           file_proto_diempb_diem_proto_goTypes,
 		DependencyIndexes: file_proto_diempb_diem_proto_depIdxs,

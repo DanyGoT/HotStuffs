@@ -2,12 +2,11 @@
 // versions:
 // 	protoc-gen-gorums v0.11.0-devel
 // 	protoc            v7.34.1
-// source: proto/diemrpc/diem.proto
+// source: proto/diempb/diem.proto
 
-package diemrpc
+package diempb
 
 import (
-	diempb "github.com/DanyGoT/HotStuffs/proto/diempb"
 	gorums "github.com/relab/gorums"
 	gorumsimpl "github.com/relab/gorums/runtime/gorumsimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
@@ -52,8 +51,8 @@ var _ emptypb.Empty
 //
 //	err := Proposal(ctx, in).Send()
 //	h := Proposal(ctx, in).Async(); err := h.Wait()
-func Proposal(ctx *ConfigContext, in *diempb.ProposalMsg) *gorums.OnewayCall[*diempb.ProposalMsg] {
-	return gorumsimpl.Multicast(ctx, in, "diemrpc.Diem.Proposal")
+func Proposal(ctx *ConfigContext, in *ProposalMsg) *gorums.OnewayCall[*ProposalMsg] {
+	return gorumsimpl.Multicast(ctx, in, "diempb.Diem.Proposal")
 }
 
 // Unicast: DiemBFT 3.1 sends a vote to the leader of the next round alone,
@@ -64,8 +63,8 @@ func Proposal(ctx *ConfigContext, in *diempb.ProposalMsg) *gorums.OnewayCall[*di
 //
 //	err := Vote(ctx, in).Send()
 //	h := Vote(ctx, in).Async(); err := h.Wait()
-func Vote(ctx *NodeContext, in *diempb.VoteMsg) *gorums.OnewayCall[*diempb.VoteMsg] {
-	return gorumsimpl.Unicast(ctx, in, "diemrpc.Diem.Vote")
+func Vote(ctx *NodeContext, in *VoteMsg) *gorums.OnewayCall[*VoteMsg] {
+	return gorumsimpl.Unicast(ctx, in, "diempb.Diem.Vote")
 }
 
 // Timeout is a multicast call invoked on all nodes in the configuration in ctx.
@@ -77,30 +76,30 @@ func Vote(ctx *NodeContext, in *diempb.VoteMsg) *gorums.OnewayCall[*diempb.VoteM
 //
 //	err := Timeout(ctx, in).Send()
 //	h := Timeout(ctx, in).Async(); err := h.Wait()
-func Timeout(ctx *ConfigContext, in *diempb.TimeoutMsg) *gorums.OnewayCall[*diempb.TimeoutMsg] {
-	return gorumsimpl.Multicast(ctx, in, "diemrpc.Diem.Timeout")
+func Timeout(ctx *ConfigContext, in *TimeoutMsg) *gorums.OnewayCall[*TimeoutMsg] {
+	return gorumsimpl.Multicast(ctx, in, "diempb.Diem.Timeout")
 }
 
 // Diem is the server-side API for the Diem Service
 type DiemServer interface {
-	Proposal(gorums.ServerContext, *diempb.ProposalMsg)
-	Vote(gorums.ServerContext, *diempb.VoteMsg)
-	Timeout(gorums.ServerContext, *diempb.TimeoutMsg)
+	Proposal(gorums.ServerContext, *ProposalMsg)
+	Vote(gorums.ServerContext, *VoteMsg)
+	Timeout(gorums.ServerContext, *TimeoutMsg)
 }
 
 func RegisterDiemServer(srv *gorums.Server, impl DiemServer) {
-	srv.RegisterHandler("diemrpc.Diem.Proposal", func(ctx gorums.ServerContext, in *gorums.Message) (*gorums.Message, error) {
-		req := gorums.AsProto[*diempb.ProposalMsg](in)
+	srv.RegisterHandler("diempb.Diem.Proposal", func(ctx gorums.ServerContext, in *gorums.Message) (*gorums.Message, error) {
+		req := gorums.AsProto[*ProposalMsg](in)
 		impl.Proposal(ctx, req)
 		return nil, nil
 	})
-	srv.RegisterHandler("diemrpc.Diem.Vote", func(ctx gorums.ServerContext, in *gorums.Message) (*gorums.Message, error) {
-		req := gorums.AsProto[*diempb.VoteMsg](in)
+	srv.RegisterHandler("diempb.Diem.Vote", func(ctx gorums.ServerContext, in *gorums.Message) (*gorums.Message, error) {
+		req := gorums.AsProto[*VoteMsg](in)
 		impl.Vote(ctx, req)
 		return nil, nil
 	})
-	srv.RegisterHandler("diemrpc.Diem.Timeout", func(ctx gorums.ServerContext, in *gorums.Message) (*gorums.Message, error) {
-		req := gorums.AsProto[*diempb.TimeoutMsg](in)
+	srv.RegisterHandler("diempb.Diem.Timeout", func(ctx gorums.ServerContext, in *gorums.Message) (*gorums.Message, error) {
+		req := gorums.AsProto[*TimeoutMsg](in)
 		impl.Timeout(ctx, req)
 		return nil, nil
 	})

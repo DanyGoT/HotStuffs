@@ -91,9 +91,8 @@ the protobuf and needs =nix develop= for =protoc=.
 #+begin_example
 diem/           the protocol, one file per module of the paper's section 3
 diemnet/        the Gorums transport: outbound calls, inbound handlers.
-                The only package besides replica that sees Gorums
-proto/diempb/   the wire messages; protobuf only, *.pb.go is generated
-proto/diemrpc/  the Gorums service over those messages; *.pb.go is generated
+                The only package besides replica that calls Gorums
+proto/diempb/   the wire messages and the Gorums service; *.pb.go is generated
 crypto/         ECDSA P-256 signing over plain bytes, and PEM key files
 replica/        wires Core + Loop + Transport and owns the lifecycle;
                 payload.go is the synthetic workload
@@ -106,16 +105,14 @@ the code.
 
 ** The layering rule
 
-=make check-deps= enforces five things:
+=make check-deps= enforces four things:
 
-1. =diem= imports the standard library, protobuf and =diempb= only — never
-   Gorums, gRPC or =diemrpc=. Gorums stays behind the =Transport= seam.
+1. =diem= imports the standard library, protobuf, gRPC, Gorums and =diempb=
+   only.
 2. =crypto= imports the standard library only.
-3. =diempb= depends on protobuf alone, never on Gorums or gRPC; the service
-   lives in =diemrpc=.
-4. =diem= contains no =go= statement — the protocol core does not spawn
+3. =diem= contains no =go= statement — the protocol core does not spawn
    goroutines.
-5. No package uses =reflect=.
+4. No package uses =reflect=.
 
 The practical effect is that the whole protocol runs in the deterministic
 harness in =diem/sim_test.go=, with no network in sight.
