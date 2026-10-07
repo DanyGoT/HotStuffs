@@ -1,6 +1,7 @@
 package diem
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
@@ -86,6 +87,12 @@ func New(cfg Config) *Core {
 	}
 	if exclude == 0 {
 		exclude = max(faulty, 1)
+	}
+	// DiemBFT 3.7 elect_reputation_leader walks back window_size blocks and
+	// until exclude_size authors are found; a ledger that forgets them first
+	// silently turns every election into round-robin.
+	if window+exclude > cfg.Ledger.History {
+		panic(fmt.Sprintf("diem: window %d + exclude %d exceeds ledger history %d", window, exclude, cfg.Ledger.History))
 	}
 
 	tree := NewBlockTree(cfg.ID, quorum, cfg.Ledger, cfg.Crypto)

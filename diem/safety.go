@@ -1,6 +1,10 @@
 package diem
 
-import "github.com/DanyGoT/HotStuffs/proto/diempb"
+import (
+	"bytes"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
+)
 
 // Safety is the paper's Safety module (3.4): the core consensus safety rules
 // and the only holder of the private key.
@@ -111,7 +115,7 @@ func (s *Safety) commitStateIDCandidate(blockRound uint64, qc *diempb.QuorumCert
 // refuse it. The counters move only on the path that produces a vote.
 func (s *Safety) MakeVote(b *diempb.Block, lastTC *diempb.TimeoutCert) *diempb.VoteMsg {
 	qcRound := QCRound(b.GetQc())
-	if !s.validSignatures(b.GetQc(), lastTC) || !s.safeToVote(b.GetRound(), qcRound, lastTC) {
+	if !validBlockID(b) || !s.validSignatures(b.GetQc(), lastTC) || !s.safeToVote(b.GetRound(), qcRound, lastTC) {
 		return nil
 	}
 	// The paper puts this lookup inside the vote and would sign a bottom
@@ -173,4 +177,12 @@ func (s *Safety) MakeTimeout(round uint64, highQC *diempb.QuorumCert, lastTC *di
 // one component assumed to survive the rest being compromised.
 func (s *Safety) validSignatures(qc *diempb.QuorumCert, tc *diempb.TimeoutCert) bool {
 	return s.verify.VerifyQC(qc) && s.verify.VerifyTC(tc)
+}
+
+// validBlockID re-derives the id the vote will sign, so it names the block whose
+// QC the safety rules just checked. DiemBFT 3.4 valid_signatures also re-checks
+// the author's signature; that lives on the proposal message, which never
+// reaches Safety, so it stays with the edge.
+func validBlockID(b *diempb.Block) bool {
+	return bytes.Equal(blockID(b.GetAuthor(), b.GetRound(), b.GetPayload(), b.GetQc()), b.GetId())
 }

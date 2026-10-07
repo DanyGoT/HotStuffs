@@ -65,6 +65,12 @@ func (v *Verifier) VerifyQC(qc *diempb.QuorumCert) bool {
 	if !bytes.Equal(VoteInfoHash(qc.GetVoteInfo()), qc.GetLedgerCommitInfo().GetVoteInfoHash()) {
 		return false
 	}
+	// DiemBFT 3.4 make_vote sets commit_state_id only for a 2-chain. The paper
+	// leaves receivers trusting the quorum on that; a commit over a round gap is
+	// refused here so a QC alone can never trigger one.
+	if vi := qc.GetVoteInfo(); Commits(qc.GetLedgerCommitInfo()) && !consecutive(vi.GetRound(), vi.GetParentRound()) {
+		return false
+	}
 	if !v.verifyCert(LedgerCommitDigest(qc.GetLedgerCommitInfo()), qc.GetSignatures()) {
 		return false
 	}

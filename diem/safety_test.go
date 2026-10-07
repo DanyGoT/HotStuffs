@@ -219,6 +219,16 @@ func TestMakeVote(t *testing.T) {
 		}
 	})
 
+	t.Run("nil when the block id does not match its fields", func(t *testing.T) {
+		f := newSafetyFixture(1)
+		b := NewBlock(1, 1, nil, GenesisQC())
+		b.SetPayload([][]byte{[]byte("x")}) // the id still hashes an empty payload
+		f.ledger.Speculate(b)
+		if v := f.safety.MakeVote(b, nil); v != nil {
+			t.Errorf("MakeVote = %+v, want nil", v)
+		}
+	})
+
 	t.Run("success raises both counters and binds the commit info", func(t *testing.T) {
 		f := newSafetyFixture(1)
 
