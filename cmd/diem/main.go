@@ -39,7 +39,8 @@ var (
 	local          = flag.Int("local", 0, "run this many replicas in one process")
 	self           = flag.String("self", "", "this replica's address, which must appear in -remotes")
 	remotes        = flag.String("remotes", "", "comma-separated addresses of every replica, in ID order 1..n")
-	keys           = flag.String("keys", "", "directory holding <id>.key and <id>.pub; empty uses insecure seeded keys")
+	keys           = flag.String("keys", "", "directory holding <id>.key and <id>.pub; required unless -insecure-seeded-keys")
+	insecureSeeded = flag.Bool("insecure-seeded-keys", false, "without -keys, derive every replica's keys from a public seed; anyone can sign for any replica")
 	genKeys        = flag.Bool("gen-keys", false, "write a key pair per replica into -keys and exit")
 	payload        = flag.Int("payload", 0, "bytes per command; 0 proposes empty blocks")
 	workers        = flag.Int("workers", 1, "commands per proposal")
@@ -160,13 +161,16 @@ func runLocal(n int) error {
 	return runAll(reps)
 }
 
-// replicaKeys reads id's keys from -keys, or without it derives the seeded
-// set every replica computes alike.
+// replicaKeys reads id's keys from -keys. Without it, the seeded set every
+// replica computes alike is used only when -insecure-seeded-keys asks for it.
 func replicaKeys(id uint32, n int) (*ecdsa.PrivateKey, map[uint32]*ecdsa.PublicKey, error) {
 	if *keys != "" {
 		return crypto.ReadKeys(*keys, id)
 	}
-	slog.Warn("no -keys: using insecure seeded keys")
+	if !*insecureSeeded {
+		return nil, nil, errors.New("no -keys: pass -keys DIR, or -insecure-seeded-keys to use public-seed keys")
+	}
+	slog.Warn("using insecure seeded keys")
 	privs, pubs, err := crypto.SeededKeys(n)
 	if err != nil {
 		return nil, nil, err
