@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"google.golang.org/protobuf/proto"
 )
 
 // Verifier authenticates inbound messages. It holds no protocol state — every
@@ -58,9 +59,10 @@ func (v *Verifier) VerifyQC(qc *diempb.QuorumCert) bool {
 		return false
 	}
 	if QCRound(qc) == 0 {
-		// Genesis is trusted, not certified: every replica hardcodes it, so it
-		// carries neither a quorum nor an author signature.
-		return bytes.Equal(qc.GetVoteInfo().GetId(), genesisBlock.GetId())
+		// Genesis carries neither a quorum nor an author signature, so nothing
+		// vouches for a round-0 certificate but equality with the one every
+		// replica hardcodes.
+		return proto.Equal(qc, genesisQC)
 	}
 	if !bytes.Equal(VoteInfoHash(qc.GetVoteInfo()), qc.GetLedgerCommitInfo().GetVoteInfoHash()) {
 		return false

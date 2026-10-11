@@ -130,7 +130,8 @@ Lemma numbers here are DiemBFT's.
   Lemma 9 / Property 4 timing bounds do not hold under reordering or loss.
 - =QuorumSize= is ceil((n+f+1)/2), equal to 2f+1 only when n = 3f+1; for other n it
   is above it, safe but not what the paper's liveness counts assume.
-- Genesis QC is trusted by id only (=verify.go:VerifyQC=), by design.
+- Genesis QC carries no quorum: a round-0 certificate is accepted only as the exact
+  hardcoded =genesis.go:genesisQC= (=verify.go:VerifyQC=), by design.
 - Leader election: exclude_size in [f, 2f] and window_size large enough that
   active \ last_authors is non-empty are config assumptions; the code falls back to
   round-robin on an empty difference rather than enforcing them
