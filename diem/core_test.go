@@ -277,6 +277,26 @@ func TestCoreBoundsVoteAccumulation(t *testing.T) {
 	}
 }
 
+// TestCoreDropsVotesForPastRounds stalls the replica in a late round and checks
+// that only the previous and current rounds still open vote buckets.
+func TestCoreDropsVotesForPastRounds(t *testing.T) {
+	f := newCoreFixture(t)
+	f.core.pacemaker.AdvanceRoundTC(makeTC(9))
+	if got := f.core.State().Round; got != 10 {
+		t.Fatalf("setup: round %d, want 10", got)
+	}
+	for r := uint64(1); r <= 8; r++ {
+		f.core.Step(VoteEvent{Msg: fabricatedVote(1, r)})
+	}
+	if got := len(f.core.tree.votes); got != 0 {
+		t.Fatalf("%d vote buckets for rounds below the previous one, want 0", got)
+	}
+	f.core.Step(VoteEvent{Msg: fabricatedVote(1, 9)})
+	if got := len(f.core.tree.votes); got != 1 {
+		t.Fatalf("%d vote buckets after a vote for the previous round, want 1", got)
+	}
+}
+
 func TestNewRejectsHistoryShorterThanReputationWalk(t *testing.T) {
 	ledger := NewMemLedger()
 	ledger.History = defaultWindowSize

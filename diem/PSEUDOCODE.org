@@ -86,16 +86,14 @@ Accumulate the vote; a certificate that completes is processed and a new-round
 event fires.
 
 - Implemented :: =core.go:processVoteMsg=.
-- Differs :: a round-lead bound precedes the paper's body. =processVoteMsg=
-  drops a vote claiming a round more than =maxRoundLead=
-  (=core.go:maxRoundLead=, 4) above the current one. The paper has no bound.
-  Votes bucket on a digest over a =LedgerCommitInfo= its sender picks freely,
-  and nothing a receiver can check binds the round a vote claims, so without the
-  bound one sender opens one bucket per message and only a commit — needing a
-  quorum those votes can never reach — would prune them. And the new-round
-  event fires only when =processCertificateQC= moved the round. The paper fires
-  it on every QC, so a late QC for a round the leader already left on a TC made
-  it propose a second block in its round.
+- Differs :: =processVoteMsg= ignores votes more than =maxRoundLead=
+  (=core.go:maxRoundLead=, 4) rounds ahead, or older than the previous round.
+  The paper accepts all. Each distinct vote opens its own bucket, a faulty
+  node can make every vote distinct, and buckets are only freed on commit —
+  which its votes never cause. The window caps how many buckets it can open.
+- Differs :: a new round starts only when a QC advances the round. The paper
+  starts one on every QC, so a late QC made the leader propose twice in one
+  round.
 
 ** process_new_round_event(last_tc)
 
@@ -515,13 +513,14 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
 - Canonical certificate encoding :: =blocktree.go:canonical=,
   =pacemaker.go:ProcessRemoteTimeout=, the strict-increase and
   every-signature-valid checks in =verify.go:verifyCert= and =VerifyTC=, and the
-  low-s form in =crypto/ecdsa.go:Sign= and =Verify=. A block
-  id covers its parent certificate's signature slice byte for byte
-  (=hash.go:blockID=), so one quorum left unordered or padded with junk is one
-  quorum's worth of distinct, individually valid block ids, each entering the
-  block tree and the speculation tree.
-- The round-lead bound :: =core.go:maxRoundLead=, applied in =processVoteMsg=.
-  Nothing in the paper bounds how far ahead an inbound vote may claim to be.
+  low-s form in =crypto/ecdsa.go:Sign= and =Verify=. A block id hashes its
+  parent certificate's signatures byte for byte (=hash.go:blockID=). If the
+  same quorum could be reordered, padded with junk or re-encoded, it would
+  yield many valid block ids, and each would enter the block tree and the
+  speculation tree.
+- The round bounds :: =core.go:maxRoundLead= and the previous-round floor,
+  both applied in =processVoteMsg=. The paper puts no limit on how far ahead
+  or behind a vote's round may be.
 - The missing-ancestor counter :: =safety.go:declinedMissingAncestor= and its
   accessor =DeclinedMissingAncestor=, incremented in =MakeVote= and surfaced
   through =core.go:State=, whose =DeclinedMissingAncestor= field copies it.
