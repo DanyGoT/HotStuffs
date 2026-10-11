@@ -133,6 +133,35 @@ func TestCoreFormsQCFromQuorum(t *testing.T) {
 	}
 }
 
+// TestCoreProposesOncePerRound is the late-vote case: a leader that entered
+// its round on a TC and proposed must not propose again when the votes for the
+// round it skipped complete a QC after all.
+func TestCoreProposesOncePerRound(t *testing.T) {
+	f := newCoreFixture(t)
+	p := proposal(1, 1, 1)
+	f.core.Step(ProposalEvent{Msg: p})
+
+	for _, from := range []uint32{1, 3, 4} {
+		f.core.Step(TimeoutEvent{Msg: timeoutFrom(t, from)})
+	}
+	if got := f.core.State().Round; got != 2 {
+		t.Fatalf("setup: round %d after a TC for round 1, want 2", got)
+	}
+	if len(f.net.proposals) != 1 {
+		t.Fatalf("setup: emitted %d proposals on entering round 2, want 1", len(f.net.proposals))
+	}
+
+	for _, from := range []uint32{1, 3, 4} {
+		f.core.Step(VoteEvent{Msg: voteFor(t, from, p.GetBlock())})
+	}
+	if got := f.core.State().HighQCRound; got != 1 {
+		t.Fatalf("setup: high QC round %d after the late votes, want 1", got)
+	}
+	if len(f.net.proposals) != 1 {
+		t.Fatalf("emitted %d proposals for round 2, want 1", len(f.net.proposals))
+	}
+}
+
 // timeoutFrom builds replica from's honest timeout for round 1 over genesis.
 func timeoutFrom(t *testing.T, from uint32) *diempb.TimeoutMsg {
 	t.Helper()

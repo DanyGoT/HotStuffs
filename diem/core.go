@@ -185,14 +185,15 @@ func (c *Core) Step(e Event) {
 
 // processCertificateQC is the paper's process_certificate_qc. The order
 // matters: LeaderElection reads the round the certificate arrived in, so it
-// must run before the Pacemaker advances past it.
-func (c *Core) processCertificateQC(qc *diempb.QuorumCert) {
+// must run before the Pacemaker advances past it. It reports whether the
+// round moved.
+func (c *Core) processCertificateQC(qc *diempb.QuorumCert) bool {
 	if qc == nil {
-		return
+		return false
 	}
 	c.tree.ProcessQC(qc)
 	c.leaders.UpdateLeaders(qc)
-	c.pacemaker.AdvanceRoundQC(qc)
+	return c.pacemaker.AdvanceRoundQC(qc)
 }
 
 // processProposalMsg is the paper's process_proposal_msg. Authentication has
@@ -244,7 +245,12 @@ func (c *Core) processVoteMsg(m *diempb.VoteMsg) {
 	if qc == nil {
 		return
 	}
-	c.processCertificateQC(qc)
+	// DiemBFT v4 3.1 process_vote_msg fires a new-round event on every QC. A
+	// late QC for a round already left on a TC would make the leader propose a
+	// second block in its round, so the event fires only when the round moved.
+	if !c.processCertificateQC(qc) {
+		return
+	}
 	c.processNewRoundEvent(nil)
 }
 
