@@ -17,6 +17,30 @@ running one replica per process.
 =make test= runs the tests. =make proto= regenerates the protobuf code and
 needs =nix develop=.
 
+* Cluster
+
+=scripts/uis.sh= runs one replica per UiS VM (pitter1-15) through the benchkit
+sweep in a Gorums checkout.
+
+Prerequisites:
+- Go, and a Gorums checkout that contains =benchkit/=. =GORUMS= points at it;
+  the default is =~/sync/skole/26H/DAT620/gorums=.
+- SSH to the VMs through the UiS jump host. =UIS_USER=<username> scripts/uis.sh ssh-config=
+  prints the =~/.ssh/config= block to add.
+- Optionally =HOSTS= (default =pitter[1-15]=) and =OUT= (default =out/uis=).
+
+#+begin_src sh
+scripts/uis.sh check
+scripts/uis.sh smoke
+#+end_src
+
+=check= builds the binary and sweep, then runs sweep's own diagnostics: ssh,
+the jump host, clocks and ports. Fix whatever it reports before going on.
+=smoke= runs four replicas for ten seconds and answers one question: do they
+commit at all. Results land under =OUT=. =scripts/uis.sh= with no argument
+lists the other commands (=scale=, =load=, =rate=, =long=, =collect=,
+=plot=, =all=).
+
 * Code
 
 - =diem/= is the protocol. It has no networking and runs on one goroutine.
@@ -28,6 +52,21 @@ needs =nix develop=.
 - =scripts/= runs benchmarks on the UiS machines.
 
 =diem/README.org= explains the protocol code in more detail.
+
+* Limits
+
+- No block sync. DiemBFT section 3 defines none, so a replica that misses a
+  proposal declines to vote on its descendants (counted in =diem/core.go:DeclinedMissingAncestor=).
+- =highest_vote_round= is not persisted. =diem/pacemaker.go:LocalTimeoutRound= has
+  no =save_consensus_state()=, so a restarted replica can vote twice in a round.
+- Keys are seeded. Without =-keys=, every replica derives the same insecure key
+  set (=crypto/ecdsa.go:SeededKeys=).
+- No equivocation evidence. Conflicting messages from one replica are not
+  recorded or reported.
+- No verified sender identity. Gorums does not tell a handler which peer sent a
+  message, so this code trusts the =sender= field and checks signatures
+  (=diemnet/server.go:handler=). Fields without a signature are not covered.
+  See [[https://github.com/relab/gorums/issues/325][relab/gorums#325]].
 
 * Contributing
 
