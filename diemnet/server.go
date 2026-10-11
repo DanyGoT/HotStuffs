@@ -18,6 +18,9 @@ import (
 // explicitly and is authenticated by signature, never by connection. That costs
 // little, since BFT requires content authentication regardless, but it is why
 // the ServerContext is unused in all three handlers.
+// relab/gorums#325 (https://github.com/relab/gorums/issues/325) proposes to bind
+// a node ID to the peer's TLS certificate. With it, a handler could reject any
+// message whose sender differs from the authenticated peer.
 //
 // The handlers deliberately do not call ctx.Release(). Gorums processes one
 // sender's requests in receipt order while the handler holds the lock, and that
