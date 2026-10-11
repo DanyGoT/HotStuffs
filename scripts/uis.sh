@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # uis.sh — run DiemBFT on the UiS VMs (pitter1-15) through Gorums' benchkit
-# sweep, one replica per VM. sweep hands each node -self/-remotes; with no
-# -keys the replicas derive the same seeded key set, so nothing but the binary
-# is shipped.
+# sweep, one replica per VM. sweep hands each node -self/-remotes; with
+# -insecure-seeded-keys and no -keys the replicas derive the same seeded key
+# set, so nothing but the binary is shipped.
 #
 # Usage: scripts/uis.sh <command>
 #   ssh-config  print the ~/.ssh/config block sweep needs (needs UIS_USER)
@@ -47,7 +47,8 @@ sweep() {
 run() {
     local label=$1
     shift
-    sweep -hosts "$hosts" -binary "$bin" -benchmarks diem -outdir "$out" -sweep "$label" "$@"
+    sweep -hosts "$hosts" -binary "$bin" -benchmarks diem -outdir "$out" -sweep "$label" \
+        -extra-args -insecure-seeded-keys "$@"
 }
 
 # -workers is diem's batch: commands per proposal. Payload 0 proposes empty

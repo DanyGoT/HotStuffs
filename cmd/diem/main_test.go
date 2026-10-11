@@ -42,3 +42,19 @@ func TestAddresses(t *testing.T) {
 		})
 	}
 }
+
+// TestReplicaKeysNeedsExplicitSeed pins that public-seed keys are never the
+// silent default: without -keys they need -insecure-seeded-keys.
+func TestReplicaKeysNeedsExplicitSeed(t *testing.T) {
+	*keys = ""
+	t.Cleanup(func() { *insecureSeeded = false })
+
+	*insecureSeeded = false
+	if _, _, err := replicaKeys(1, 4); err == nil {
+		t.Fatal("replicaKeys without -keys or -insecure-seeded-keys succeeded")
+	}
+	*insecureSeeded = true
+	if _, _, err := replicaKeys(1, 4); err != nil {
+		t.Fatalf("replicaKeys with -insecure-seeded-keys: %v", err)
+	}
+}
