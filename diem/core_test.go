@@ -16,18 +16,19 @@ import (
 // so it is also the collector for round 1's votes.
 type coreFixture struct {
 	core   *Core
+	ledger *MemLedger
 	net    *recordNet
 	events *[]Event
 }
 
 func newCoreFixture(t *testing.T) *coreFixture {
 	t.Helper()
-	f := &coreFixture{net: &recordNet{}, events: new([]Event)}
+	f := &coreFixture{ledger: NewMemLedger(), net: &recordNet{}, events: new([]Event)}
 	ids := []uint32{1, 2, 3, 4}
 	f.core = New(Config{
 		ID:           2,
 		Validators:   ids,
-		Ledger:       NewMemLedger(),
+		Ledger:       f.ledger,
 		Transactions: NewFIFOPool(16, 2).GetTransactions,
 		Crypto:       newTestSigner(testN),
 		Transport:    f.net,
@@ -256,4 +257,24 @@ func TestNewRejectsHistoryShorterThanReputationWalk(t *testing.T) {
 		}
 	}()
 	New(Config{ID: 1, Validators: []uint32{1, 2, 3, 4}, Ledger: ledger})
+}
+
+// TestCoreIgnoresForgedGenesisCommit replays the attack end to end: a valid
+// timeout re-wrapped around a forged round-0 commit certificate. No signature
+// covers a timeout's high_commit_qc, so only the Verifier stands between it and
+// a commit of a block no quorum ever certified.
+func TestCoreIgnoresForgedGenesisCommit(t *testing.T) {
+	f := newCoreFixture(t)
+	v := NewVerifier(newTestSigner(testN), testQuorum)
+	p := proposal(1, 1, 1)
+	f.core.Step(ProposalEvent{Msg: p})
+
+	m := timeoutFrom(t, 3)
+	m.SetHighCommitQc(forgedGenesisQC(p.GetBlock().GetId()))
+	if v.VerifyTimeout(m) {
+		f.core.Step(TimeoutEvent{Msg: m})
+	}
+	if _, ok := f.ledger.CommittedBlock(p.GetBlock().GetId()); ok {
+		t.Fatal("committed the round-1 block on a forged genesis certificate")
+	}
 }

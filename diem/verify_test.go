@@ -259,6 +259,41 @@ func TestVerifyRejectsForgedCertificate(t *testing.T) {
 	})
 }
 
+// forgedGenesisQC is genesisQC with its VoteInfo pointing at parent and its
+// commit info claiming a commit: unsigned, yet still round 0 over the genesis id.
+func forgedGenesisQC(parent []byte) *diempb.QuorumCert {
+	qc := proto.Clone(genesisQC).(*diempb.QuorumCert)
+	qc.GetVoteInfo().SetParentId(parent)
+	qc.GetLedgerCommitInfo().SetCommitStateId(hashOf(0x09))
+	return qc
+}
+
+// TestVerifyQCRejectsForgedGenesis pins genesis as one fixed certificate. No
+// signature covers a round-0 QC, so one that differs from genesisQC in any
+// field is a certificate nobody certified; accepted, its commit info would
+// commit whatever parent it names.
+func TestVerifyQCRejectsForgedGenesis(t *testing.T) {
+	v := newTestVerifier()
+	tests := map[string]func(*diempb.QuorumCert){
+		"parent id":       func(qc *diempb.QuorumCert) { qc.GetVoteInfo().SetParentId(hashOf(0x01)) },
+		"parent round":    func(qc *diempb.QuorumCert) { qc.GetVoteInfo().SetParentRound(7) },
+		"commit state id": func(qc *diempb.QuorumCert) { qc.GetLedgerCommitInfo().SetCommitStateId(hashOf(0x09)) },
+		"author":          func(qc *diempb.QuorumCert) { qc.SetAuthor(3) },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			qc := proto.Clone(genesisQC).(*diempb.QuorumCert)
+			mutate(qc)
+			if v.VerifyQC(qc) {
+				t.Errorf("VerifyQC = true for genesis with a changed %s", name)
+			}
+		})
+	}
+	if v.VerifyQC(forgedGenesisQC(hashOf(0x01))) {
+		t.Error("VerifyQC = true for a forged genesis certificate that commits")
+	}
+}
+
 // TestVerifyQCRejectsUnattributedAuthor pins the author signature (3.3,
 // process_vote: author <- u, author_signature <- sign_u(signatures)). It
 // certifies nothing the quorum does not, so a replica could ignore it and stay
