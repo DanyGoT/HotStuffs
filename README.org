@@ -29,6 +29,10 @@ needs =nix develop=.
 
 =diem/README.org= explains the protocol code in more detail.
 
+* Contributing
+
+Conventions are in [[./CONTRIBUTING.org][CONTRIBUTING.org]].
+
 * Papers
 
 - [[https://developers.diem.com/papers/diem-consensus-state-machine-replication-in-the-diem-blockchain/2021-08-17.pdf][DiemBFT v4: State Machine Replication in the Diem Blockchain]]
