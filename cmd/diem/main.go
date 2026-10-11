@@ -257,8 +257,8 @@ func writeResults(reps []*replica.Replica, elapsed time.Duration) error {
 			Workers: *workers, Payload: *payload, Rate: *rate,
 		})
 		cfg.SetDuration(runTime.Nanoseconds())
-		ops := uint64(len(r.Log()))
 		lats := r.Latencies()
+		ops := uint64(len(lats))
 		ns := make([]int64, len(lats))
 		for j, l := range lats {
 			ns[j] = l.Nanoseconds()
