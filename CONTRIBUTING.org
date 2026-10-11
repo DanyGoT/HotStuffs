@@ -10,6 +10,8 @@ Use common sense, and follow these where they apply:
   no body. Types: =feat=, =fix=, =docs=, =refactor=, =chore=, =build=, =perf=.
 - Branches: =type/[issue_no-]description=, e.g. =feature/32-repository-hygiene=
   or =refactor/proto-views=. Use =feature= for =feat=.
+- Code references in docs: =file.go:Symbol=, e.g. =safety.go:safeToVote=.
+  Never line numbers; they drift with every edit.
 
 * Before a PR
 
