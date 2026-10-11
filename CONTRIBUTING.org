@@ -2,6 +2,11 @@
 
 [[./README.org][Back to README]]
 
+* Workflow
+
+Start from a GitHub issue. Open one branch per issue, named after it, and
+close the issue from the PR with =Closes #N=.
+
 * Naming conventions
 
 Use common sense, and follow these where they apply:
