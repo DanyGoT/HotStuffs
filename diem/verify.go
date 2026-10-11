@@ -86,19 +86,19 @@ func (v *Verifier) VerifyQC(qc *diempb.QuorumCert) bool {
 		verifySig(v.crypto, qcSigsDigest(qc.GetSignatures()), qc.GetAuthorSig())
 }
 
-// verifyCert checks a certificate's signature set is canonical — signer IDs
-// strictly increasing, so no duplicates, no padding and one wire form per
-// certificate — and that it carries a quorum of valid signatures. The order
-// matters beyond tidiness here: a block id covers its parent certificate's
-// signature slice byte for byte (blockID), so one quorum left unordered is one
-// quorum's worth of distinct valid block ids.
+// verifyCert checks a certificate carries at least a quorum of signers in
+// strictly increasing ID order, so no duplicates and one wire form per signer
+// set, and that every signature in it verifies, so it carries no bytes nobody
+// checked. The form matters beyond tidiness here: a block id covers its parent
+// certificate's signature slice byte for byte (blockID), so a set left
+// unordered or padded with junk is one quorum's worth of distinct block ids.
 func (v *Verifier) verifyCert(digest []byte, sigs []*diempb.Signature) bool {
-	for i := 1; i < len(sigs); i++ {
-		if sigs[i-1].GetSigner() >= sigs[i].GetSigner() {
+	for i, sig := range sigs {
+		if i > 0 && sigs[i-1].GetSigner() >= sig.GetSigner() || !verifySig(v.crypto, digest, sig) {
 			return false
 		}
 	}
-	return QuorumReached(v.crypto, v.quorum, digest, sigs)
+	return len(sigs) >= v.quorum
 }
 
 // VerifyTC reports whether tc carries a quorum of signers in canonical order,

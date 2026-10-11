@@ -24,19 +24,3 @@ func sign(c Crypto, id uint32, digest []byte) (*diempb.Signature, error) {
 	}
 	return diempb.Signature_builder{Signer: id, Sig: sig}.Build(), nil
 }
-
-// QuorumReached counts distinct signers whose signature over digest verifies
-// and reports whether that reaches quorum.
-func QuorumReached(c Crypto, quorum int, digest []byte, sigs []*diempb.Signature) bool {
-	seen := make(map[uint32]bool, len(sigs))
-	for _, sig := range sigs {
-		if seen[sig.GetSigner()] || !verifySig(c, digest, sig) {
-			continue
-		}
-		seen[sig.GetSigner()] = true
-		if len(seen) >= quorum {
-			return true
-		}
-	}
-	return false
-}

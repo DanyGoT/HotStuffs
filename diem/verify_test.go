@@ -24,8 +24,6 @@ func newTestVerifier() *Verifier {
 // slice byte for byte (blockID), so a leader that permutes or pads one valid
 // quorum mints arbitrarily many distinct, individually valid blocks over the
 // same parent — one entry in the pending tree and one speculated state each.
-// Deduplication inside QuorumReached does not catch it: it counts signers and
-// says nothing about their order or the slice's length.
 func TestVerifyRejectsNonCanonicalCertificates(t *testing.T) {
 	v := newTestVerifier()
 	vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
@@ -48,6 +46,25 @@ func TestVerifyRejectsNonCanonicalCertificates(t *testing.T) {
 			t.Error("VerifyQC = true for a padded signature set, want false")
 		}
 	})
+
+	// A fourth signer past the quorum: a valid one is a larger quorum, as
+	// DiemBFT allows; an invalid one is bytes nobody checked.
+	for name, tt := range map[string]struct {
+		pad  *diempb.Signature
+		want bool
+	}{
+		"valid":   {signAs(4, LedgerCommitDigest(commitInfo(nil, vi))), true},
+		"invalid": {diempb.Signature_builder{Signer: 4, Sig: []byte{0xff}}.Build(), false},
+	} {
+		t.Run("QC signatures padded with a fourth signer, "+name, func(t *testing.T) {
+			qc := makeQC(vi, nil, 1, 2, 3)
+			qc.SetSignatures(append(qc.GetSignatures(), tt.pad))
+			qc.SetAuthorSig(signAs(qc.GetAuthor(), qcSigsDigest(qc.GetSignatures())))
+			if got := v.VerifyQC(qc); got != tt.want {
+				t.Errorf("VerifyQC = %v, want %v", got, tt.want)
+			}
+		})
+	}
 
 	t.Run("TC votes out of signer order", func(t *testing.T) {
 		tc := makeTC(5, 3, 4, 5)
