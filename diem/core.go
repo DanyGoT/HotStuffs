@@ -129,6 +129,10 @@ const defaultWindowSize = 10
 // reach — would prune them. A round no certificate has been seen for is a round
 // nothing can be aggregated in anyway, and catching up does not depend on these
 // votes: a certificate rides on every proposal and every timeout.
+//
+// The same holds below the current round: a vote for a round before the
+// previous one can no longer help certify anything the leader of the current
+// round waits on, so votes more than one round behind are dropped as well.
 const maxRoundLead = 4
 
 // Start enters round 1 on the genesis certificate and arms the round timer.
@@ -237,7 +241,8 @@ func (c *Core) processTimeoutMsg(m *diempb.TimeoutMsg) {
 }
 
 func (c *Core) processVoteMsg(m *diempb.VoteMsg) {
-	if m.GetVoteInfo().GetRound() > c.pacemaker.CurrentRound()+maxRoundLead {
+	round, current := m.GetVoteInfo().GetRound(), c.pacemaker.CurrentRound()
+	if round > current+maxRoundLead || round+1 < current {
 		return
 	}
 	qc := c.tree.ProcessVote(m)
