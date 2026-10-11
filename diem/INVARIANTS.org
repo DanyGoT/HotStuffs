@@ -85,7 +85,7 @@ Terse restatement of what the DiemBFT proofs need. Code pointers are
 | well-formedness | round-r proposal/timeout carries TC(r-1) iff qc.round != r-1, else no TC | =types.go:wellFormed=, =core.go:justifyingTC=, =verify.go:VerifyProposal=, =VerifyTimeout= |
 | block id binding | id = hash(author, round, payload, qc) recomputed on receipt | =verify.go:VerifyProposal= |
 | block extends lower round | block.qc.round < block.round; edge check ahead of safe_to_vote | =verify.go:VerifyProposal=, =safety.go:safeToVote= |
-| QC validity | quorum of distinct valid signers in canonical order over the LedgerCommitInfo, which binds the VoteInfo hash; author signature; a commit only over a 2-chain | =verify.go:VerifyQC=, =verifyCert=, =quorum.go:QuorumReached= |
+| QC validity | at least a quorum of distinct signers in canonical order, every signature valid, over the LedgerCommitInfo, which binds the VoteInfo hash; author signature; a commit only over a 2-chain | =verify.go:VerifyQC=, =verifyCert= |
 | TC validity | quorum of distinct signers, each over (round, own high_qc_round) | =verify.go:VerifyTC= |
 | Safety re-verifies | QC, TC and block id re-checked before signing; the author signature stays at the edge | =safety.go:validSignatures=, =validBlockID= |
 | one vote per signer/round | duplicate votes cannot reach a quorum | =blocktree.go:ProcessVote= |
