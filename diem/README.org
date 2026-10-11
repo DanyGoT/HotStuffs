@@ -50,11 +50,11 @@ replica/replica.go wires Core + Loop + Transport; owns the lifecycle
 The algorithm is the =Safety= module plus the commit rule; everything else is
 plumbing around them.
 
-- The whole protocol surface — =core.go:151=, =Core.Step=, one switch over a
-  sealed event set, so the cases are exhaustive
-- Voting rules — =safety.go:63= =safeToVote= and =:77= =safeToTimeout=, both
-  resting on =consecutive= at =:49=
-- Commit rule — =safety.go:97= =commitStateIDCandidate=: a block whose round
+- The whole protocol surface — =core.go:Step=, one switch over a sealed event
+  set, so the cases are exhaustive
+- Voting rules — =safety.go:safeToVote= and =safeToTimeout=, both resting on
+  =consecutive=
+- Commit rule — =safety.go:commitStateIDCandidate=: a block whose round
   directly follows its parent's carries the parent's speculated state, so the
   quorum certifying the block also certifies that commit. That is the 2-chain
   rule
@@ -102,7 +102,7 @@ step through while reading and buys nothing.
 =proto/diempb/diem.proto= defines three RPCs, and deliberately no
 fourth:
 
-#+begin_example
+#+begin_example protobuf
 rpc Proposal(ProposalMsg) returns (Empty) { option (gorums.multicast) = true; }
 rpc Vote(VoteMsg)         returns (Empty) { option (gorums.unicast)   = true; }
 rpc Timeout(TimeoutMsg)   returns (Empty) { option (gorums.multicast) = true; }
