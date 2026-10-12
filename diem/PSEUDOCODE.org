@@ -92,7 +92,10 @@ event fires.
   Votes bucket on a digest over a =LedgerCommitInfo= its sender picks freely,
   and nothing a receiver can check binds the round a vote claims, so without the
   bound one sender opens one bucket per message and only a commit — needing a
-  quorum those votes can never reach — would prune them.
+  quorum those votes can never reach — would prune them. And the new-round
+  event fires only when =processCertificateQC= moved the round. The paper fires
+  it on every QC, so a late QC for a round the leader already left on a TC made
+  it propose a second block in its round.
 
 ** process_new_round_event(last_tc)
 
