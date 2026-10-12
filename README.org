@@ -23,10 +23,18 @@ needs =nix develop=.
 sweep in a Gorums checkout.
 
 Prerequisites:
-- Go, and a Gorums checkout that contains =benchkit/=. =GORUMS= points at it;
-  the default is =~/sync/skole/26H/DAT620/gorums=.
-- SSH to the VMs through the UiS jump host. =UIS_USER=<username> scripts/uis.sh ssh-config=
-  prints the =~/.ssh/config= block to add.
+- Go, and a Gorums checkout that contains =benchkit/=. Set =GORUMS= to its path.
+- SSH to the VMs through the UiS jump host. Add this to =~/.ssh/config=, with
+  your UiS username; =UIS_USER=<username> scripts/uis.sh ssh-config= prints it:
+  #+begin_example
+  Host uis
+    HostName ssh4.ux.uis.no
+    User <username>
+
+  Host pitter*
+    User <username>
+    ProxyJump uis
+  #+end_example
 - Optionally =HOSTS= (default =pitter[1-15]=) and =OUT= (default =out/uis=).
 
 #+begin_src sh
