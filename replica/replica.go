@@ -40,6 +40,9 @@ type Config struct {
 	RoundTimeout    time.Duration
 	MaxRoundTimeout time.Duration
 
+	// Duration bounds the run from core start; 0 runs until ctx is done.
+	Duration time.Duration
+
 	// Server, if set, is the Gorums server to run on, as gorums.NewLocalServers
 	// provides for a single-process cluster. Peers and Listen are then unused.
 	Server      *gorums.Server
@@ -71,6 +74,9 @@ type Replica struct {
 	// goroutine, which is the only way to read it: the core's state is not
 	// shared. It is the standing cost of DiemBFT 3 having no block-sync.
 	declined atomic.Uint64
+
+	duration time.Duration
+	elapsed  time.Duration
 }
 
 // New wires a replica. The event queue is the only dependency-free piece, so it
@@ -99,7 +105,7 @@ func New(cfg Config) *Replica {
 	signer := crypto.New(cfg.Key, cfg.Keys)
 	q := diem.NewQueue(cfg.QueueSize)
 
-	r := &Replica{id: cfg.ID, q: q, proposed: map[uint64]time.Time{}}
+	r := &Replica{id: cfg.ID, q: q, proposed: map[uint64]time.Time{}, duration: cfg.Duration}
 	ledger := diem.NewMemLedger()
 	ledger.OnCommit = r.commit
 
@@ -164,11 +170,11 @@ func (r *Replica) commit(b *diempb.Block) {
 }
 
 // Run serves the transport, waits for every peer, then runs the consensus loop
-// until ctx is done. Waiting for peers before the first round matters: a
-// proposal multicast into a half-connected configuration is simply lost, and
-// with no block-sync in DiemBFT 3 the replicas that missed it never get it
-// back. Cancelling ctx is how a replica stops; the transport is shut down after
-// the loop, never before.
+// until ctx is done or Duration has passed. Waiting for peers before the first
+// round matters: a proposal multicast into a half-connected configuration is
+// simply lost, and with no block-sync in DiemBFT 3 the replicas that missed it
+// never get it back. Cancelling ctx is how a replica stops; the transport is
+// shut down after the loop, never before.
 func (r *Replica) Run(ctx context.Context) error {
 	r.net.Start()
 	if err := r.net.WaitForPeers(ctx); err != nil {
@@ -176,10 +182,20 @@ func (r *Replica) Run(ctx context.Context) error {
 		return err
 	}
 	r.core.Start()
+	if r.duration > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.duration)
+		defer cancel()
+	}
+	start := time.Now()
 	err := r.loop.Run(ctx)
+	r.elapsed = time.Since(start)
 	r.stop()
 	return err
 }
+
+// Elapsed is how long the consensus loop ran. Read it only after Run returns.
+func (r *Replica) Elapsed() time.Duration { return r.elapsed }
 
 // stop shuts the transport down and keeps the inbound queue moving while it
 // does. That queue is bounded and blocking by design, so a handler parked on a
