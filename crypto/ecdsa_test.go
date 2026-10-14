@@ -2,6 +2,9 @@ package crypto
 
 import (
 	"bytes"
+	"crypto/elliptic"
+	"encoding/asn1"
+	"math/big"
 	"testing"
 )
 
@@ -147,5 +150,39 @@ func TestSignIsRandomized(t *testing.T) {
 	}
 	if !signers[1].Verify(1, msg, sig1) || !signers[1].Verify(1, msg, sig2) {
 		t.Error("both signatures should verify")
+	}
+}
+
+// TestSignaturesAreLowS checks that every signature leaves Sign in low-s form
+// and that its high-s twin, (r, N-s), fails to verify: ECDSA alone accepts
+// both, which is two wire forms for one signature.
+func TestSignaturesAreLowS(t *testing.T) {
+	signers := newSigners(t, 1)
+	msg := fixedHash(3)
+	n := elliptic.P256().Params().N
+	half := new(big.Int).Rsh(n, 1)
+
+	// Sign is randomized, so a missed normalisation shows up in about half
+	// of all signatures; 64 rounds leave it a 2^-64 chance to slip through.
+	for range 64 {
+		sig, err := signers[1].Sign(msg)
+		if err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
+		var rs struct{ R, S *big.Int }
+		if _, err := asn1.Unmarshal(sig, &rs); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if rs.S.Cmp(half) > 0 {
+			t.Fatal("Sign returned a high-s signature")
+		}
+		rs.S.Sub(n, rs.S)
+		twin, err := asn1.Marshal(rs)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if signers[1].Verify(1, msg, twin) {
+			t.Fatal("Verify accepted the high-s twin of a valid signature")
+		}
 	}
 }
