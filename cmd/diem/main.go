@@ -302,6 +302,11 @@ func report(reps []*replica.Replica) error {
 	if len(reps) > 1 {
 		fmt.Fprintln(w, "logs agree over their common prefix")
 	}
+	for i, l := range logs {
+		if len(l) == 0 {
+			return fmt.Errorf("replica %d committed no block", reps[i].ID())
+		}
+	}
 	return nil
 }
 
