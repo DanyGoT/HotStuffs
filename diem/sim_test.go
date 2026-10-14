@@ -24,6 +24,13 @@ type sim struct {
 
 	queue    []func()
 	rejected int
+
+	// tamper, if set, stands between a sender and the network: it turns one
+	// message for one replica into whatever that replica receives instead.
+	tamper func(to uint32, e Event) []Event
+	// invalid is how many tampered messages the test built to fail edge
+	// verification; exactly that many must be rejected.
+	invalid int
 }
 
 const (
@@ -100,19 +107,30 @@ func (s *sim) verify(to uint32, e Event) bool {
 	return true // LocalTimeoutEvent is this replica's own timer, not a message
 }
 
-// checkNoRejections is the point of counting. Every replica here is honest and
-// no message is corrupted in flight, so anything the edge rejects is something
-// an honest replica built and its peers would discard.
-func (s *sim) checkNoRejections() {
+// checkRejections is the point of counting. Apart from what the test forged on
+// purpose, every message is one an honest replica built, so anything else the
+// edge rejects is something its peers would discard.
+func (s *sim) checkRejections() {
 	s.t.Helper()
-	if s.rejected != 0 {
-		s.t.Fatalf("edge verification rejected %d honest messages", s.rejected)
+	if s.rejected != s.invalid {
+		s.t.Fatalf("edge verification rejected %d messages, want the %d forged ones", s.rejected, s.invalid)
+	}
+}
+
+// send is the network: what a replica sends passes through tamper on its way.
+func (s *sim) send(to uint32, e Event) {
+	if s.tamper == nil {
+		s.deliver(to, e)
+		return
+	}
+	for _, e := range s.tamper(to, e) {
+		s.deliver(to, e)
 	}
 }
 
 func (s *sim) broadcast(e Event) {
 	for _, id := range s.ids {
-		s.deliver(id, e)
+		s.send(id, e)
 	}
 }
 
@@ -120,7 +138,7 @@ func (s *sim) broadcast(e Event) {
 // advancing the clock whenever the queue runs dry.
 func (s *sim) run(steps int) {
 	s.t.Helper()
-	defer s.checkNoRejections()
+	defer s.checkRejections()
 	for _, id := range s.ids {
 		if !s.down[id] {
 			s.cores[id].Start()
@@ -142,7 +160,7 @@ func (s *sim) run(steps int) {
 type simNet struct{ s *sim }
 
 func (n *simNet) Proposal(p *diempb.ProposalMsg)    { n.s.broadcast(ProposalEvent{Msg: p}) }
-func (n *simNet) Vote(v *diempb.VoteMsg, to uint32) { n.s.deliver(to, VoteEvent{Msg: v}) }
+func (n *simNet) Vote(v *diempb.VoteMsg, to uint32) { n.s.send(to, VoteEvent{Msg: v}) }
 func (n *simNet) Timeout(m *diempb.TimeoutMsg)      { n.s.broadcast(TimeoutEvent{Msg: m}) }
 
 // live is the replicas that were not crashed.
@@ -330,5 +348,60 @@ func TestDuplicateTimeoutDoesNotRetrigger(t *testing.T) {
 	}
 	if tc := pm.ProcessRemoteTimeout(timeout(4)); tc != nil {
 		t.Fatal("a duplicate timeout produced a second TC for the same round")
+	}
+}
+
+// equivocate is p's sender signing a second block for the same round, over the
+// same certificate. Only a Byzantine leader does this; the signature is its own,
+// so the edge cannot tell the two apart.
+func equivocate(t *testing.T, n int, p *diempb.ProposalMsg) *diempb.ProposalMsg {
+	t.Helper()
+	b := p.GetBlock()
+	fork := NewBlock(b.GetAuthor(), b.GetRound(), [][]byte{[]byte("fork")}, b.GetQc())
+	sig, err := sign(newTestSigner(n), p.GetSender(), fork.GetId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return diempb.ProposalMsg_builder{
+		Block:        fork,
+		LastRoundTc:  p.GetLastRoundTc(),
+		HighCommitQc: p.GetHighCommitQc(),
+		Sender:       p.GetSender(),
+		Sig:          sig,
+	}.Build()
+}
+
+// TestEquivocatingLeaderIsSafe makes replica 1 a Byzantine leader: every block
+// it proposes has a twin, and the replicas split two and two on which arrives
+// first. Both reach everyone, so only voting once per round keeps either twin
+// from a quorum, and no round replica 1 led may ever commit.
+func TestEquivocatingLeaderIsSafe(t *testing.T) {
+	const n = 4
+	s := newSim(t, n)
+	forked := map[uint64]bool{}
+	s.tamper = func(to uint32, e Event) []Event {
+		p, ok := e.(ProposalEvent)
+		if !ok || p.Msg.GetSender() != 1 {
+			return []Event{e}
+		}
+		forked[p.Msg.GetBlock().GetRound()] = true
+		twin := ProposalEvent{Msg: equivocate(t, n, p.Msg)}
+		if to <= 2 {
+			return []Event{e, twin}
+		}
+		return []Event{twin, e}
+	}
+	s.run(4000)
+
+	s.checkProgress(5)
+	s.checkAgreement()
+	s.checkChained()
+	if len(forked) == 0 {
+		t.Fatal("replica 1 never led a round")
+	}
+	for _, b := range s.commits[2] {
+		if forked[b.GetRound()] {
+			t.Fatalf("committed round %d, where replica 1 equivocated", b.GetRound())
+		}
 	}
 }
