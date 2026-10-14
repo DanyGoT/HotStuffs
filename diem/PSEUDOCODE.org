@@ -513,8 +513,9 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   pacemaker has advanced and the block has been speculated), and =VerifyTC=
   rejects a TC for round 0, which no replica ever times out of.
 - Canonical certificate encoding :: =blocktree.go:canonical=,
-  =pacemaker.go:ProcessRemoteTimeout=, and the strict-increase and
-  every-signature-valid checks in =verify.go:verifyCert= and =VerifyTC=. A block
+  =pacemaker.go:ProcessRemoteTimeout=, the strict-increase and
+  every-signature-valid checks in =verify.go:verifyCert= and =VerifyTC=, and the
+  low-s form in =crypto/ecdsa.go:Sign= and =Verify=. A block
   id covers its parent certificate's signature slice byte for byte
   (=hash.go:blockID=), so one quorum left unordered or padded with junk is one
   quorum's worth of distinct, individually valid block ids, each entering the
