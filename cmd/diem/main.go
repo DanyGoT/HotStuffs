@@ -154,6 +154,7 @@ func runLocal(n int) error {
 			ID: id, Key: privs[id], Keys: pubs,
 			Transactions: transactions(),
 			RoundTimeout: *viewDuration,
+			Duration:     *runTime,
 			Server:       srvs[i],
 		})
 	}
@@ -200,18 +201,16 @@ func runOne() error {
 		Key: priv, Keys: pubs,
 		Transactions: transactions(),
 		RoundTimeout: *viewDuration,
+		Duration:     *runTime,
 		DialOptions:  dialOptions(),
 	})})
 }
 
-// runAll runs every replica until -time elapses or the process is interrupted,
-// then reports what each committed.
+// runAll runs every replica for -time from its first round, or until the
+// process is interrupted, then reports what each committed.
 func runAll(reps []*replica.Replica) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	start := time.Now()
-	root, stop := context.WithTimeout(root, *runTime)
-	defer stop()
 
 	var wg sync.WaitGroup
 	for i, r := range reps {
@@ -228,20 +227,19 @@ func runAll(reps []*replica.Replica) error {
 		})
 	}
 	wg.Wait()
-	elapsed := time.Since(start)
 	if err := report(reps); err != nil {
 		return err
 	}
 	if *output == "" {
 		return nil
 	}
-	return writeResults(reps, elapsed)
+	return writeResults(reps)
 }
 
 // writeResults writes one benchkit Result per replica to -output, so
 // benchkit/cmd/sweep can collect it. An op is a committed block, and its
 // latency is propose to commit at the replica that proposed it.
-func writeResults(reps []*replica.Replica, elapsed time.Duration) error {
+func writeResults(reps []*replica.Replica) error {
 	n := *local
 	if n == 0 {
 		addrs, err := addresses()
@@ -258,6 +256,7 @@ func writeResults(reps []*replica.Replica, elapsed time.Duration) error {
 		})
 		cfg.SetDuration(runTime.Nanoseconds())
 		ops := uint64(len(r.Log()))
+		elapsed := r.Elapsed()
 		lats := r.Latencies()
 		ns := make([]int64, len(lats))
 		for j, l := range lats {
