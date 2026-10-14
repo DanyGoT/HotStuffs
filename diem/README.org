@@ -27,7 +27,7 @@ diem/
   types.go         NewBlock and the small helpers over the diempb messages:
                    QCRound, Commits, MaxHighQCRound, well-formedness
   seams.go         Transport, Crypto and Clock: what the core plugs into
-  quorum.go        Faulty(n), QuorumSize(n), QuorumReached
+  quorum.go        Faulty(n), QuorumSize(n)
   hash.go          domain-separated digests, over plain byte slices
   genesis.go       the fixed genesis block and its certificate
   sim_test.go      the deterministic multi-replica harness
@@ -89,8 +89,8 @@ This package declares three, all in =seams.go=, and each has a real
 implementation and a test one: =Transport= (=diemnet= and the sim's in-memory
 network) is the hand-off out of the consensus goroutine, =Crypto= (=crypto= and
 =testSigner=) signs and verifies digests as plain bytes, with the signer id as an
-argument — it knows nothing of the message types, and counting a quorum is
-=QuorumReached= in =diem=, and =Clock= (=SystemClock= and =fakeClock=)
+argument — it knows nothing of the message types, and checking a certificate is
+=verify.go:verifyCert= in =diem=, and =Clock= (=SystemClock= and =fakeClock=)
 arms the round timer.
 
 The ledger, the mempool, the block tree and the backoff policy are concrete

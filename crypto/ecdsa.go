@@ -8,9 +8,21 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/asn1"
 	"encoding/binary"
 	"fmt"
+	"math/big"
 )
+
+// ECDSA accepts both (r, s) and (r, N-s) for one signature. Only the low-s
+// form, s <= N/2, is signed and accepted here, so each signature has one wire
+// form: a block id hashes its parent certificate's signatures byte for byte.
+var (
+	curveOrder = elliptic.P256().Params().N
+	halfOrder  = new(big.Int).Rsh(curveOrder, 1)
+)
+
+type ecdsaSig struct{ R, S *big.Int }
 
 // Signer signs with this replica's private key and verifies against the
 // registered public key of the claimed signer.
@@ -26,15 +38,32 @@ func New(key *ecdsa.PrivateKey, keys map[uint32]*ecdsa.PublicKey) *Signer {
 }
 
 // Sign signs digest with this replica's private key and returns the ASN.1 DER
-// signature.
+// signature in low-s form.
 func (s *Signer) Sign(digest []byte) ([]byte, error) {
-	return ecdsa.SignASN1(rand.Reader, s.key, digest)
+	der, err := ecdsa.SignASN1(rand.Reader, s.key, digest)
+	if err != nil {
+		return nil, err
+	}
+	var sig ecdsaSig
+	if _, err := asn1.Unmarshal(der, &sig); err != nil {
+		return nil, err
+	}
+	if sig.S.Cmp(halfOrder) <= 0 {
+		return der, nil
+	}
+	sig.S.Sub(curveOrder, sig.S)
+	return asn1.Marshal(sig)
 }
 
-// Verify checks sig over digest against the registered public key of signer.
+// Verify checks sig over digest against the registered public key of signer,
+// and rejects a signature not in low-s form.
 func (s *Signer) Verify(signer uint32, digest, sig []byte) bool {
 	pub, ok := s.keys[signer]
 	if !ok {
+		return false
+	}
+	var rs ecdsaSig
+	if _, err := asn1.Unmarshal(sig, &rs); err != nil || rs.S.Cmp(halfOrder) > 0 {
 		return false
 	}
 	return ecdsa.VerifyASN1(pub, digest, sig)
