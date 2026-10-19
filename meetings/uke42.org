@@ -1,0 +1,18 @@
+#+title: Uke42
+
+
+
+relab/hotstuffs bruker ed25519 allerede i eddsa.
+
+i verify.go, early finish om det ikke er nok godkjente i loopen. 4 nodes, og 2
+failed kan ikke gi quorum uansett om de siste 2 er good.
+
+
+
+I gorums, så er NewConfig endret til å returne cfg, closeFn, err, i stedet for
+bare cfg, err
+Burde kanskje sjekke hvorfor vi ikke bruker NewConfig?
+Den nye fiksen, fikser at den bruker TLS.
+
+
+Kan man bruke SIMD? Hadde vært insane kult - personlig notat
