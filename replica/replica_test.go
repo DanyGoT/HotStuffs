@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/DanyGoT/HotStuffs/diem"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/relab/gorums"
+	"github.com/relab/gorums/benchkit"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -63,6 +65,7 @@ func cluster(t *testing.T, n int, round time.Duration) ([]*Replica, func(context
 			Keys:         pubs,
 			Transactions: NewPayload(32, 4, 0).Transactions,
 			RoundTimeout: round,
+			Measure:      benchkit.Options{Interval: round},
 			Server:       srvs[i],
 		})
 	}
@@ -161,6 +164,45 @@ func TestClusterCommitsIdenticalPrefix(t *testing.T) {
 
 	cancel()
 	<-allDone
+}
+
+// TestResultCountsOwnBlocks pins that a replica's result counts only the
+// committed blocks it proposed, so the replicas' throughputs sum to the system
+// rate rather than n times it, and that the interval stream covers every op.
+func TestResultCountsOwnBlocks(t *testing.T) {
+	reps, run := cluster(t, 4, testRound)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	allDone := make(chan struct{})
+	go func() { run(ctx); close(allDone) }()
+
+	const wantDepth = 20
+	if !waitFor(10*time.Second, func() bool { return slices.Min(depths(reps)) >= wantDepth }) {
+		t.Fatalf("depths after timeout: %v, want every replica >= %d", depths(reps), wantDepth)
+	}
+	cancel()
+	<-allDone
+
+	for _, r := range reps {
+		var own uint64
+		for _, b := range r.Log() {
+			if b.GetAuthor() == r.ID() {
+				own++
+			}
+		}
+		res := r.Result()
+		if got := res.GetTotalOps(); got != own {
+			t.Errorf("replica %d: TotalOps = %d, want %d own blocks of %d committed", r.ID(), got, own, len(r.Log()))
+		}
+		var streamed uint64
+		for _, e := range res.GetEvents() {
+			streamed += e.GetThroughput().GetOps()
+		}
+		if streamed != own {
+			t.Errorf("replica %d: interval events carry %d ops, want %d", r.ID(), streamed, own)
+		}
+	}
 }
 
 // TestNewRejectsMismatchedPeersAndKeys: the public keys are the replica set, so
