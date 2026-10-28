@@ -18,8 +18,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"runtime/pprof"
-	"runtime/trace"
 	"slices"
 	"strings"
 	"sync"
@@ -57,29 +55,12 @@ func main() {
 	}
 }
 
-func run() error {
-	if std.CPUProfile != "" {
-		f, err := os.Create(std.CPUProfile)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if err := pprof.StartCPUProfile(f); err != nil {
-			return err
-		}
-		defer pprof.StopCPUProfile()
+func run() (err error) {
+	stop, err := benchkit.StartProfilers(std.CPUProfile, std.MemProfile, std.Trace)
+	if err != nil {
+		return err
 	}
-	if std.Trace != "" {
-		f, err := os.Create(std.Trace)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if err := trace.Start(f); err != nil {
-			return err
-		}
-		defer trace.Stop()
-	}
+	defer func() { err = errors.Join(err, stop()) }()
 
 	switch {
 	case *genKeys:
