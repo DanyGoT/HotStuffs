@@ -1,10 +1,10 @@
 // Command diem runs one DiemBFT replica, or a whole cluster in a single process
 // with -local.
 //
-// The flag names follow benchkit.StandardFlags and -output writes a benchkit
-// result file, so benchkit/cmd/sweep can drive this binary across a cluster.
-// Flags the prototype does not act on yet are accepted and ignored rather than
-// dropped, so the contract stays whole.
+// The standard flags come from benchkit.RegisterFlags and -output writes a
+// benchkit result file, so benchkit/cmd/sweep can drive this binary across a
+// cluster. Standard flags with no meaning for one protocol, such as -benchmarks,
+// are accepted and ignored.
 package main
 
 import (
@@ -23,7 +23,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/DanyGoT/HotStuffs/crypto"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
@@ -35,36 +34,19 @@ import (
 )
 
 var (
-	// Acted on.
+	std = benchkit.RegisterFlags(flag.CommandLine)
+
 	local          = flag.Int("local", 0, "run this many replicas in one process")
-	self           = flag.String("self", "", "this replica's address, which must appear in -remotes")
-	remotes        = flag.String("remotes", "", "comma-separated addresses of every replica, in ID order 1..n")
 	keys           = flag.String("keys", "", "directory holding <id>.key and <id>.pub; required unless -insecure-seeded-keys")
 	insecureSeeded = flag.Bool("insecure-seeded-keys", false, "without -keys, derive every replica's keys from a public seed; anyone can sign for any replica")
 	genKeys        = flag.Bool("gen-keys", false, "write a key pair per replica into -keys and exit")
-	payload        = flag.Int("payload", 0, "bytes per command; 0 proposes empty blocks")
-	workers        = flag.Int("workers", 1, "commands per proposal")
-	rate           = flag.Int("rate", 0, "commands per second; 0 is unthrottled")
-	runTime        = flag.Duration("time", 5*time.Second, "how long to run")
-	output         = flag.String("output", "", "write a benchkit result file here")
-	verbose        = flag.Bool("verbose", false, "log at debug level")
-	cpuprofile     = flag.String("cpuprofile", "", "write a CPU profile here")
-	traceFile      = flag.String("trace", "", "write an execution trace here")
-	faultKillAfter = flag.Duration("fault-kill-after", 0, "stop replica 1 after this long; -local only")
 	viewDuration   = flag.Duration("view-duration", 0, "base round timeout; 0 picks a default")
-
-	// Accepted for the benchkit contract; not acted on yet.
-	_ = flag.String("stats-mode", "", "unused")
-	_ = flag.Duration("interval", time.Second, "unused")
-	_ = flag.String("benchmarks", "", "unused")
-	_ = flag.Int("rate-step", 0, "unused")
-	_ = flag.Duration("call-timeout", 0, "unused")
 )
 
 func main() {
 	flag.Parse()
 	level := slog.LevelInfo
-	if *verbose {
+	if std.Verbose {
 		level = slog.LevelDebug
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
@@ -76,8 +58,8 @@ func main() {
 }
 
 func run() error {
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
+	if std.CPUProfile != "" {
+		f, err := os.Create(std.CPUProfile)
 		if err != nil {
 			return err
 		}
@@ -87,8 +69,8 @@ func run() error {
 		}
 		defer pprof.StopCPUProfile()
 	}
-	if *traceFile != "" {
-		f, err := os.Create(*traceFile)
+	if std.Trace != "" {
+		f, err := os.Create(std.Trace)
 		if err != nil {
 			return err
 		}
@@ -104,7 +86,7 @@ func run() error {
 		return writeKeys()
 	case *local > 0:
 		return runLocal(*local)
-	case *self != "":
+	case std.Self != "":
 		return runOne()
 	}
 	return errors.New("nothing to do: pass -local N, or -self with -remotes")
@@ -155,7 +137,7 @@ func runLocal(n int) error {
 			ID: id, Key: privs[id], Keys: pubs,
 			Transactions: transactions(),
 			RoundTimeout: *viewDuration,
-			Duration:     *runTime,
+			Duration:     std.Duration,
 			Server:       srvs[i],
 		})
 	}
@@ -186,7 +168,7 @@ func runOne() error {
 	if err != nil {
 		return err
 	}
-	self := strings.TrimSpace(*self)
+	self := strings.TrimSpace(std.Self)
 	idx := slices.Index(addrs, self)
 	if idx < 0 {
 		return fmt.Errorf("-self %q does not appear in -remotes", self)
@@ -205,7 +187,7 @@ func runOne() error {
 		Key: priv, Keys: pubs,
 		Transactions: transactions(),
 		RoundTimeout: *viewDuration,
-		Duration:     *runTime,
+		Duration:     std.Duration,
 		DialOptions:  dialOptions(),
 	})})
 }
@@ -219,9 +201,9 @@ func runAll(reps []*replica.Replica) error {
 	var wg sync.WaitGroup
 	for i, r := range reps {
 		ctx := root
-		if *faultKillAfter > 0 && i == 0 {
+		if std.FaultKillAfter > 0 && i == 0 {
 			var kill context.CancelFunc
-			ctx, kill = context.WithTimeout(root, *faultKillAfter)
+			ctx, kill = context.WithTimeout(root, std.FaultKillAfter)
 			defer kill()
 		}
 		wg.Go(func() {
@@ -234,7 +216,7 @@ func runAll(reps []*replica.Replica) error {
 	if err := report(reps); err != nil {
 		return err
 	}
-	if *output == "" {
+	if std.Output == "" {
 		return nil
 	}
 	return writeResults(reps)
@@ -256,9 +238,9 @@ func writeResults(reps []*replica.Replica) error {
 	for i, r := range reps {
 		cfg := benchkit.NewRunConfig(benchkit.Dimensions{
 			Benchmark: "diem", Nodes: n,
-			Workers: *workers, Payload: *payload, Rate: *rate,
+			Workers: std.Workers, Payload: std.Payload, Rate: std.Rate,
 		})
-		cfg.SetDuration(runTime.Nanoseconds())
+		cfg.SetDuration(std.Duration.Nanoseconds())
 		ops := uint64(len(r.Log()))
 		elapsed := r.Elapsed()
 		lats := r.Latencies()
@@ -274,8 +256,8 @@ func writeResults(reps []*replica.Replica) error {
 			Latencies:  ns,
 		}.Build()
 	}
-	label := cmp.Or(*self, "local")
-	return benchkit.WriteLabeledReport(results, label, *output)
+	label := cmp.Or(std.Self, "local")
+	return benchkit.WriteLabeledReport(results, label, std.Output)
 }
 
 // report prints each replica's committed depth and checks the logs agree over
@@ -313,12 +295,12 @@ func report(reps []*replica.Replica) error {
 // it is its ID, so an empty or repeated entry would hand two replicas the same
 // identity rather than fail.
 func addresses() ([]string, error) {
-	if strings.TrimSpace(*remotes) == "" {
+	if len(std.Remotes) == 1 && strings.TrimSpace(std.Remotes[0]) == "" {
 		return nil, nil
 	}
-	addrs := strings.Split(*remotes, ",")
+	addrs := make([]string, len(std.Remotes))
 	seen := make(map[string]bool, len(addrs))
-	for i, addr := range addrs {
+	for i, addr := range std.Remotes {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
 			return nil, fmt.Errorf("-remotes entry %d is empty", i+1)
@@ -334,10 +316,10 @@ func addresses() ([]string, error) {
 
 // transactions is the leader's payload source; nil proposes empty blocks.
 func transactions() func() [][]byte {
-	if *payload <= 0 {
+	if std.Payload <= 0 {
 		return nil
 	}
-	return replica.NewPayload(*payload, *workers, *rate).Transactions
+	return replica.NewPayload(std.Payload, std.Workers, std.Rate).Transactions
 }
 
 // GORUMS: NewLocalServers and any real dial need explicit transport

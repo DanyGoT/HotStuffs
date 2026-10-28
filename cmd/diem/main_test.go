@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"flag"
+	"testing"
+)
 
 // TestAddresses covers what -remotes must not silently accept: a replica's
 // position in the list is its ID, so a repeated or empty entry would hand two
@@ -23,7 +26,9 @@ func TestAddresses(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			*remotes = tt.flag
+			if err := flag.Set("remotes", tt.flag); err != nil {
+				t.Fatal(err)
+			}
 			got, err := addresses()
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("addresses() error = %v, wantErr %v", err, tt.wantErr)
@@ -56,5 +61,19 @@ func TestReplicaKeysNeedsExplicitSeed(t *testing.T) {
 	*insecureSeeded = true
 	if _, _, err := replicaKeys(1, 4); err != nil {
 		t.Fatalf("replicaKeys with -insecure-seeded-keys: %v", err)
+	}
+}
+
+// TestSweepFlags pins that every flag benchkit/cmd/sweep passes a node is
+// defined; an undefined one stops the binary before it runs.
+func TestSweepFlags(t *testing.T) {
+	for _, name := range []string{
+		"self", "remotes", "benchmarks", "workers", "payload", "time", "output",
+		"rate", "interval", "stats-mode", "rate-step", "rate-step-max",
+		"stream-mode", "cpuprofile", "memprofile", "verbose",
+	} {
+		if flag.Lookup(name) == nil {
+			t.Errorf("flag -%s is not defined", name)
+		}
 	}
 }
