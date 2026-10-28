@@ -213,9 +213,14 @@ func (s *sim) checkChained() {
 	}
 }
 
-func (s *sim) checkProgress(want int) {
+// checkProgress holds ids, or every live replica if none are given, to at
+// least want commits.
+func (s *sim) checkProgress(want int, ids ...uint32) {
 	s.t.Helper()
-	for _, id := range s.live() {
+	if len(ids) == 0 {
+		ids = s.live()
+	}
+	for _, id := range ids {
 		if n := len(s.commits[id]); n < want {
 			s.t.Fatalf("replica %d committed %d blocks, want at least %d", id, n, want)
 		}
@@ -404,4 +409,56 @@ func TestEquivocatingLeaderIsSafe(t *testing.T) {
 			t.Fatalf("committed round %d, where replica 1 equivocated", b.GetRound())
 		}
 	}
+}
+
+// proposalTo is a tamper that hands every message through, except the proposal
+// for round to replica to, which goes to f.
+func proposalTo(to uint32, round uint64, f func(Event) []Event) func(uint32, Event) []Event {
+	return func(id uint32, e Event) []Event {
+		if p, ok := e.(ProposalEvent); ok && id == to && p.Msg.GetBlock().GetRound() == round {
+			return f(e)
+		}
+		return []Event{e}
+	}
+}
+
+// TestDroppedProposalIsSafe loses one proposal for replica 4. DiemBFT section 3
+// has no block sync, so replica 4 can never execute that block or anything
+// above it, and only the others are held to progress. What it must not do is
+// commit past the gap.
+func TestDroppedProposalIsSafe(t *testing.T) {
+	s := newSim(t, 4)
+	dropped := false
+	s.tamper = proposalTo(4, 3, func(Event) []Event { dropped = true; return nil })
+	s.run(4000)
+
+	if !dropped {
+		t.Fatal("no proposal for round 3 reached replica 4")
+	}
+	s.checkProgress(8, 1, 2, 3)
+	s.checkAgreement()
+	s.checkChained()
+}
+
+// TestReorderedProposalsAreSafe hands replica 4 the proposal for round 3 only
+// after the one for round 4, whose certificate has already moved it past round
+// 3. As with a lost proposal, only the others are held to progress.
+func TestReorderedProposalsAreSafe(t *testing.T) {
+	s := newSim(t, 4)
+	var held Event
+	hold := proposalTo(4, 3, func(e Event) []Event { held = e; return nil })
+	s.tamper = func(to uint32, e Event) []Event {
+		if p, ok := e.(ProposalEvent); ok && to == 4 && p.Msg.GetBlock().GetRound() == 4 && held != nil {
+			return []Event{e, held}
+		}
+		return hold(to, e)
+	}
+	s.run(4000)
+
+	if held == nil {
+		t.Fatal("no proposal for round 3 reached replica 4")
+	}
+	s.checkProgress(8, 1, 2, 3)
+	s.checkAgreement()
+	s.checkChained()
 }
