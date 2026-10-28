@@ -16,6 +16,7 @@ import (
 	"github.com/DanyGoT/HotStuffs/diemnet"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/relab/gorums"
+	"github.com/relab/gorums/benchkit"
 )
 
 const (
@@ -40,8 +41,9 @@ type Config struct {
 	RoundTimeout    time.Duration
 	MaxRoundTimeout time.Duration
 
-	// Duration bounds the run from core start; 0 runs until ctx is done.
-	Duration time.Duration
+	// Measure configures the measurement taken from core start. Its Duration
+	// bounds the run; 0 runs until ctx is done.
+	Measure benchkit.Options
 
 	// Server, if set, is the Gorums server to run on, as gorums.NewLocalServers
 	// provides for a single-process cluster. Peers and Listen are then unused.
@@ -61,10 +63,9 @@ type Replica struct {
 	// mu guards the commit log, which the ledger appends to on the consensus
 	// goroutine and callers read from their own. It guards application state,
 	// never protocol state.
-	mu        sync.Mutex
-	commits   []*diempb.Block
-	latencies []time.Duration
-	commands  uint64
+	mu       sync.Mutex
+	commits  []*diempb.Block
+	commands uint64
 
 	// proposed is when this replica sent its proposal for each round it led and
 	// has not yet seen committed. Only the consensus goroutine touches it.
@@ -75,8 +76,9 @@ type Replica struct {
 	// shared. It is the standing cost of DiemBFT 3 having no block-sync.
 	declined atomic.Uint64
 
-	duration time.Duration
-	elapsed  time.Duration
+	measure benchkit.Options
+	m       *benchkit.Measurement
+	result  *benchkit.Result
 }
 
 // New wires a replica. The event queue is the only dependency-free piece, so it
@@ -105,7 +107,7 @@ func New(cfg Config) *Replica {
 	signer := crypto.New(cfg.Key, cfg.Keys)
 	q := diem.NewQueue(cfg.QueueSize)
 
-	r := &Replica{id: cfg.ID, q: q, proposed: map[uint64]time.Time{}, duration: cfg.Duration}
+	r := &Replica{id: cfg.ID, q: q, proposed: map[uint64]time.Time{}, measure: cfg.Measure}
 	ledger := diem.NewMemLedger()
 	ledger.OnCommit = r.commit
 
@@ -151,9 +153,8 @@ func (s stamper) Proposal(p *diempb.ProposalMsg) {
 // its propose-to-commit latency. Rounds at or below b's can no longer commit
 // a block of this replica's, so their stamps go too.
 func (r *Replica) commit(b *diempb.Block) {
-	var lat time.Duration
 	if t, ok := r.proposed[b.GetRound()]; ok && b.GetAuthor() == r.id {
-		lat = time.Since(t)
+		r.m.Stats.AddLatency(time.Since(t))
 		for round := range r.proposed {
 			if round <= b.GetRound() {
 				delete(r.proposed, round)
@@ -163,39 +164,38 @@ func (r *Replica) commit(b *diempb.Block) {
 	r.mu.Lock()
 	r.commits = append(r.commits, b)
 	r.commands += uint64(len(b.GetPayload()))
-	if lat > 0 {
-		r.latencies = append(r.latencies, lat)
-	}
 	r.mu.Unlock()
 }
 
 // Run serves the transport, waits for every peer, then runs the consensus loop
-// until ctx is done or Duration has passed. Waiting for peers before the first
-// round matters: a proposal multicast into a half-connected configuration is
-// simply lost, and with no block-sync in DiemBFT 3 the replicas that missed it
-// never get it back. Cancelling ctx is how a replica stops; the transport is
-// shut down after the loop, never before.
+// until ctx is done or Measure.Duration has passed. Waiting for peers before
+// the first round matters: a proposal multicast into a half-connected
+// configuration is simply lost, and with no block-sync in DiemBFT 3 the
+// replicas that missed it never get it back. Cancelling ctx is how a replica
+// stops; the transport is shut down after the loop, never before.
 func (r *Replica) Run(ctx context.Context) error {
 	r.net.Start()
 	if err := r.net.WaitForPeers(ctx); err != nil {
 		r.stop()
 		return err
 	}
+	r.m = benchkit.StartMeasurement(r.measure)
 	r.core.Start()
-	if r.duration > 0 {
+	if d := r.measure.Duration; d > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.duration)
+		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
-	start := time.Now()
 	err := r.loop.Run(ctx)
-	r.elapsed = time.Since(start)
+	r.result = r.m.Finish()
 	r.stop()
 	return err
 }
 
-// Elapsed is how long the consensus loop ran. Read it only after Run returns.
-func (r *Replica) Elapsed() time.Duration { return r.elapsed }
+// Result is the run's measurement: an op is a committed block this replica
+// proposed, timed propose to commit on its own clock. Read it only after Run
+// returns; it is nil if Run never reached the first round.
+func (r *Replica) Result() *benchkit.Result { return r.result }
 
 // stop shuts the transport down and keeps the inbound queue moving while it
 // does. That queue is bounded and blocking by design, so a handler parked on a
@@ -236,14 +236,6 @@ func (r *Replica) Log() []*diempb.Block {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]*diempb.Block(nil), r.commits...)
-}
-
-// Latencies is the propose-to-commit latency of each committed block this
-// replica proposed, measured on its own clock.
-func (r *Replica) Latencies() []time.Duration {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Clone(r.latencies)
 }
 
 // Commands is how many commands the committed blocks carried.

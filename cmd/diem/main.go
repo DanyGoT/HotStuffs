@@ -118,7 +118,7 @@ func runLocal(n int) error {
 			ID: id, Key: privs[id], Keys: pubs,
 			Transactions: transactions(),
 			RoundTimeout: *viewDuration,
-			Duration:     std.Duration,
+			Measure:      std.Options(),
 			Server:       srvs[i],
 		})
 	}
@@ -168,7 +168,7 @@ func runOne() error {
 		Key: priv, Keys: pubs,
 		Transactions: transactions(),
 		RoundTimeout: *viewDuration,
-		Duration:     std.Duration,
+		Measure:      std.Options(),
 		DialOptions:  dialOptions(),
 	})})
 }
@@ -203,9 +203,8 @@ func runAll(reps []*replica.Replica) error {
 	return writeResults(reps)
 }
 
-// writeResults writes one benchkit Result per replica to -output, so
-// benchkit/cmd/sweep can collect it. An op is a committed block, and its
-// latency is propose to commit at the replica that proposed it.
+// writeResults writes each replica's benchkit Result to -output, so
+// benchkit/cmd/sweep can collect it.
 func writeResults(reps []*replica.Replica) error {
 	n := *local
 	if n == 0 {
@@ -217,25 +216,16 @@ func writeResults(reps []*replica.Replica) error {
 	}
 	results := make([]*benchkit.Result, len(reps))
 	for i, r := range reps {
-		cfg := benchkit.NewRunConfig(benchkit.Dimensions{
+		res := r.Result()
+		cfg := res.GetConfig()
+		cfg.ApplyDimensions(benchkit.Dimensions{
 			Benchmark: "diem", Nodes: n,
 			Workers: std.Workers, Payload: std.Payload, Rate: std.Rate,
 		})
-		cfg.SetDuration(std.Duration.Nanoseconds())
-		ops := uint64(len(r.Log()))
-		elapsed := r.Elapsed()
-		lats := r.Latencies()
-		ns := make([]int64, len(lats))
-		for j, l := range lats {
-			ns[j] = l.Nanoseconds()
-		}
-		results[i] = benchkit.Result_builder{
-			Config:     cfg,
-			TotalOps:   ops,
-			TotalTime:  elapsed.Nanoseconds(),
-			Throughput: float64(ops) / elapsed.Seconds(),
-			Latencies:  ns,
-		}.Build()
+		cfg.SetDuration(int64(std.Duration))
+		cfg.SetInterval(int64(std.Interval))
+		cfg.SetStatsMode(std.StatsMode)
+		results[i] = res
 	}
 	label := cmp.Or(std.Self, "local")
 	return benchkit.WriteLabeledReport(results, label, std.Output)
