@@ -1,0 +1,30 @@
+#+title: Documentation
+
+[[../README.org][Back to README]]
+
+- [[./capstone-hotstuff-gorums.md][capstone-hotstuff-gorums.md]]: the project brief.
+- [[./meetings/][meetings/]]: notes from the supervisor meetings.
+- [[./experiments/README.org][experiments/]]: running on the UiS VMs, and the results.
+
+* Limits
+
+- No block sync. DiemBFT section 3 defines none, so a replica that misses a
+  proposal declines to vote on its descendants (counted in =diem/core.go:DeclinedMissingAncestor=).
+- =highest_vote_round= is not persisted. =diem/pacemaker.go:LocalTimeoutRound= has
+  no =save_consensus_state()=, so a restarted replica can vote twice in a round.
+- Keys are seeded. Without =-keys=, every replica derives the same insecure key
+  set (=crypto/ecdsa.go:SeededKeys=).
+- No equivocation evidence. Conflicting messages from one replica are not
+  recorded or reported.
+- No verified sender identity. Gorums does not tell a handler which peer sent a
+  message, so this code trusts the =sender= field and checks signatures
+  (=diemnet/server.go:handler=). Fields without a signature are not covered.
+  See [[https://github.com/relab/gorums/issues/325][relab/gorums#325]].
+
+* Papers
+
+- [[https://developers.diem.com/papers/diem-consensus-state-machine-replication-in-the-diem-blockchain/2021-08-17.pdf][DiemBFT v4: State Machine Replication in the Diem Blockchain]]
+- [[https://arxiv.org/abs/1803.05069][HotStuff: BFT Consensus in the Lens of Blockchain]]
+- [[https://ieeexplore.ieee.org/document/7980198][Gorums]]
+- [[https://github.com/relab/hotstuff][relab/hotstuff]]
+- [[https://malkhi.com/posts/2020/04/making-BFT-systems-robust/][Making BFT Protocols Really Robust with Twins]]
