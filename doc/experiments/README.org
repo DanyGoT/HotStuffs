@@ -1,0 +1,40 @@
+#+title: Experiments
+
+Results of the sweeps on the UiS VMs. Each =<label>/<suite>/report/= holds
+sweep's =agg.csv=; v0.1 also has the rendered =report.pdf=. The raw output stays
+in =out/uis=, which is not tracked.
+
+- [[./v0.1/SUMMARY.md][v0.1]]: the baseline and the bottleneck probe.
+- [[./v0.2/SUMMARY.md][v0.2]]: the protobuf variants against a same-day v0.1 control, and scale.
+
+* Cluster
+
+=scripts/uis.sh= runs one replica per UiS VM (pitter1-15) through the benchkit
+sweep in a Gorums checkout.
+
+Prerequisites:
+- Go, and a Gorums checkout that contains =benchkit/=. Set =GORUMS= to its path.
+- SSH to the VMs through the UiS jump host. Add this to =~/.ssh/config=, with
+  your UiS username; =UIS_USER=<username> scripts/uis.sh ssh-config= prints it:
+  #+begin_example
+  Host uis
+    HostName ssh4.ux.uis.no
+    User <username>
+
+  Host pitter*
+    User <username>
+    ProxyJump uis
+  #+end_example
+- Optionally =HOSTS= (default =pitter[1-15]=) and =OUT= (default =out/uis=).
+
+#+begin_src sh
+scripts/uis.sh check
+scripts/uis.sh smoke
+#+end_src
+
+=check= builds the binary and sweep, then runs sweep's own diagnostics: ssh,
+the jump host, clocks and ports. Fix whatever it reports before going on.
+=smoke= runs four replicas for ten seconds and answers one question: do they
+commit at all. Results land under =OUT=. =scripts/uis.sh= with no argument
+lists the other commands (=scale=, =load=, =rate=, =long=, =collect=,
+=plot=, =all=).
