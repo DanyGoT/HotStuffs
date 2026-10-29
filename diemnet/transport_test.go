@@ -353,6 +353,90 @@ func TestHandlerAcceptsWellFormed(t *testing.T) {
 	}
 }
 
+// answer replies to every block request p receives with b, and keeps whatever
+// else arrives. The func it returns stops it and hands back what it kept.
+func answer(p *peer, b *diempb.Block) func() []diem.Event {
+	var kept []diem.Event
+	done, exited := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(exited)
+		for {
+			select {
+			case <-done:
+				return
+			case e := <-p.q:
+				if r, ok := e.(diem.BlockRequestEvent); ok {
+					r.Reply <- b
+				} else {
+					kept = append(kept, e)
+				}
+			}
+		}
+	}()
+	return func() []diem.Event {
+		close(done)
+		<-exited
+		for {
+			select {
+			case e := <-p.q:
+				kept = append(kept, e)
+			default:
+				return kept
+			}
+		}
+	}
+}
+
+// TestRequestBlockChecksTheID has one peer answer a block request with a
+// forgery that claims the requested id. Only a block whose recomputed id is
+// the one asked for may reach the core.
+func TestRequestBlockChecksTheID(t *testing.T) {
+	const n = 4
+	proposal, _, _ := round1(t, 1, n)
+	want := proposal.GetBlock()
+	forged := diempb.Block_builder{
+		Author:  want.GetAuthor(),
+		Round:   want.GetRound(),
+		Payload: [][]byte{[]byte("forged")},
+		Qc:      want.GetQc(),
+		Id:      want.GetId(),
+	}.Build()
+
+	for _, tc := range []struct {
+		name string
+		held *diempb.Block // what the third peer answers with
+	}{
+		{"forgery only", nil},
+		{"forgery and block", want},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			peers := newGroup(t, n)
+			for i, b := range []*diempb.Block{forged, nil, tc.held} {
+				stop := answer(peers[i+1], b)
+				t.Cleanup(func() { stop() })
+			}
+			self := answer(peers[0], nil)
+
+			peers[0].tr.fetch(peers[0].tr.peers(), want.GetId())
+			got := self()
+
+			if tc.held == nil {
+				if len(got) != 0 {
+					t.Fatalf("got %d events from a fetch no correct peer answered, want none", len(got))
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("got %d events, want the one block", len(got))
+			}
+			e, ok := got[0].(diem.BlockEvent)
+			if !ok || !proto.Equal(e.Block, want) {
+				t.Fatalf("got %+v, want the requested block", got[0])
+			}
+		})
+	}
+}
+
 // TestOutboundQueueDrops never calls Start, so nothing drains the outbound
 // queue; sends must drop rather than block. Outbound drops are safe because
 // loss is what the round timer recovers from, while the inbound queue is

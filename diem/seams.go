@@ -18,6 +18,9 @@ type Transport interface {
 	Vote(*diempb.VoteMsg, uint32)
 	// Timeout sends to all replicas, this one included.
 	Timeout(*diempb.TimeoutMsg)
+	// RequestBlock asks every replica for the block with id. The block, if one
+	// comes back, arrives as a BlockEvent.
+	RequestBlock(id []byte)
 }
 
 // Crypto signs and verifies digests. DiemBFT aggregates nothing, so a

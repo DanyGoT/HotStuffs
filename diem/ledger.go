@@ -27,6 +27,7 @@ type MemLedger struct {
 	History int
 
 	pending   map[string]speculated
+	held      map[string]*diempb.Block // waiting on a parent not yet speculated
 	committed map[string]*diempb.Block
 	order     []string // committed ids, oldest first
 
@@ -50,6 +51,7 @@ func NewMemLedger() *MemLedger {
 		Execute:   ExecuteHash,
 		History:   defaultHistory,
 		pending:   map[string]speculated{},
+		held:      map[string]*diempb.Block{},
 		committed: map[string]*diempb.Block{},
 	}
 	l.commitID = string(genesisBlock.GetId())
@@ -59,16 +61,14 @@ func NewMemLedger() *MemLedger {
 	return l
 }
 
-// Speculate executes b over its parent's state. A parent this replica never
-// speculated leaves nothing stored and returns the zero state, and this is
-// where the paper's missing block-sync lands.
+// Speculate executes b over its parent's state, then every held block that was
+// waiting on b. A parent this replica never speculated returns the zero state,
+// and b is held until the parent arrives, unless the parent is at or below the
+// commit frontier, where it can never arrive.
 //
-// Section 3 defines no way to fetch a block, so a replica that loses one
-// proposal cannot speculate it, cannot vote on it, and cannot speculate its
-// children either. Commit cannot walk back across the gap to move the frontier,
-// so it does not recover: the replica is out of the quorum for good. The
-// protocol is shipped as written rather than extended with a sync path, and
-// PendingState reporting false is how Safety learns to decline —
+// DiemBFT section 3 defines no way to fetch a block; the core fetches the
+// parent of a held block, and this is where it lands. Until it does,
+// PendingState reports false and Safety declines to vote —
 // Safety.DeclinedMissingAncestor counts what that costs.
 //
 // The paper's signature is speculate(prev_block_id, block_id, txns). All
@@ -77,12 +77,39 @@ func NewMemLedger() *MemLedger {
 func (l *MemLedger) Speculate(b *diempb.Block) []byte {
 	prev, ok := l.PendingState(parentID(b))
 	if !ok {
+		if QCRound(b.GetQc()) > l.commitRound() {
+			l.held[string(b.GetId())] = b
+		}
 		return zeroHash[:]
 	}
+	id := string(b.GetId())
 	state := l.Execute(prev, b.GetPayload())
-	l.pending[string(b.GetId())] = speculated{block: b, state: state}
+	l.pending[id] = speculated{block: b, state: state}
+	for hid, h := range l.held {
+		if string(parentID(h)) == id {
+			delete(l.held, hid)
+			l.Speculate(h)
+		}
+	}
 	return state
 }
+
+// Missing is the oldest ancestor of a held block that this ledger has never
+// seen, or nil if the block is not held.
+func (l *MemLedger) Missing(blockID []byte) []byte {
+	b, ok := l.held[string(blockID)]
+	if !ok {
+		return nil
+	}
+	for {
+		parent := parentID(b)
+		if b, ok = l.held[string(parent)]; !ok {
+			return parent
+		}
+	}
+}
+
+func (l *MemLedger) commitRound() uint64 { return l.committed[l.commitID].GetRound() }
 
 // PendingState is the speculated state for a block. The last committed block
 // answers too: its children extend it, and it is no longer pending.
@@ -135,7 +162,13 @@ func (l *MemLedger) CommittedBlock(blockID []byte) (*diempb.Block, bool) {
 // prune drops speculated states that can no longer be reached from the commit
 // frontier. A block survives only while its parent does, so deleting the
 // orphans repeatedly until nothing changes removes whole abandoned branches.
+// A held block goes once its parent falls to the frontier or below.
 func (l *MemLedger) prune() {
+	for id, b := range l.held {
+		if QCRound(b.GetQc()) <= l.commitRound() {
+			delete(l.held, id)
+		}
+	}
 	for changed := true; changed; {
 		changed = false
 		for id, s := range l.pending {

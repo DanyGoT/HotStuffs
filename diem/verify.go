@@ -183,3 +183,9 @@ func (v *Verifier) VerifyVote(m *diempb.VoteMsg) bool {
 // verifyCommitQC accepts an absent commit certificate: it is a catch-up hint,
 // not evidence anything depends on.
 func (v *Verifier) verifyCommitQC(qc *diempb.QuorumCert) bool { return qc == nil || v.VerifyQC(qc) }
+
+// VerifyBlock reports whether b is the block with the given id. The id is a
+// hash over every field, so one block that passes is the block itself.
+func (v *Verifier) VerifyBlock(b *diempb.Block, id []byte) bool {
+	return bytes.Equal(b.GetId(), id) && validBlockID(b)
+}

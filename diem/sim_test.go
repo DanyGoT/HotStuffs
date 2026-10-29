@@ -2,6 +2,7 @@ package diem
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -70,7 +71,7 @@ func newSim(t *testing.T, n int, down ...uint32) *sim {
 			Ledger:       ledger,
 			Transactions: pool.GetTransactions,
 			Crypto:       newTestSigner(n),
-			Transport:    &simNet{s: s},
+			Transport:    &simNet{s: s, id: id},
 			Clock:        s.clock,
 			Backoff:      NewBackoff(simRoundBase, simRoundMax, 2),
 			Sink:         func(e Event) { s.deliver(id, e) },
@@ -157,11 +158,30 @@ func (s *sim) run(steps int) {
 	}
 }
 
-type simNet struct{ s *sim }
+type simNet struct {
+	s  *sim
+	id uint32
+}
 
 func (n *simNet) Proposal(p *diempb.ProposalMsg)    { n.s.broadcast(ProposalEvent{Msg: p}) }
 func (n *simNet) Vote(v *diempb.VoteMsg, to uint32) { n.s.send(to, VoteEvent{Msg: v}) }
 func (n *simNet) Timeout(m *diempb.TimeoutMsg)      { n.s.broadcast(TimeoutEvent{Msg: m}) }
+
+// RequestBlock asks the live replicas in turn, as one queued step, and delivers
+// the first block that passes the requester's check: the quorum call of
+// diemnet, in a fixed order.
+func (n *simNet) RequestBlock(id []byte) {
+	n.s.queue = append(n.s.queue, func() {
+		for _, peer := range n.s.live() {
+			reply := make(chan *diempb.Block, 1)
+			n.s.cores[peer].Step(BlockRequestEvent{ID: id, Reply: reply})
+			if b := <-reply; n.s.vers[n.id].VerifyBlock(b, id) {
+				n.s.deliver(n.id, BlockEvent{Block: b})
+				return
+			}
+		}
+	})
+}
 
 // live is the replicas that were not crashed.
 func (s *sim) live() []uint32 {
@@ -303,6 +323,7 @@ type dupNet struct{ proposals, votes, timeouts int }
 func (n *dupNet) Proposal(*diempb.ProposalMsg) { n.proposals++ }
 func (n *dupNet) Vote(*diempb.VoteMsg, uint32) { n.votes++ }
 func (n *dupNet) Timeout(*diempb.TimeoutMsg)   { n.timeouts++ }
+func (n *dupNet) RequestBlock([]byte)          {}
 
 // TestDuplicateTimeoutDoesNotRetrigger pins the one place this implementation
 // departs from process_remote_timeout: the paper's f+1 and 2f+1 tests sit
@@ -422,28 +443,39 @@ func proposalTo(to uint32, round uint64, f func(Event) []Event) func(uint32, Eve
 	}
 }
 
-// TestDroppedProposalIsSafe loses one proposal for replica 4. DiemBFT section 3
-// has no block sync, so replica 4 can never execute that block or anything
-// above it, and only the others are held to progress. What it must not do is
-// commit past the gap.
-func TestDroppedProposalIsSafe(t *testing.T) {
-	s := newSim(t, 4)
-	dropped := false
-	s.tamper = proposalTo(4, 3, func(Event) []Event { dropped = true; return nil })
-	s.run(4000)
+// TestDroppedProposalsRecover loses a run of consecutive proposals for replica
+// 4, from round 3 on. It must fetch the whole gap, one block at a time, and
+// commit past it with the others.
+func TestDroppedProposalsRecover(t *testing.T) {
+	for _, gap := range []uint64{1, 2, defaultHistory / 4} {
+		t.Run(fmt.Sprint(gap), func(t *testing.T) {
+			s := newSim(t, 4)
+			dropped := 0
+			s.tamper = func(to uint32, e Event) []Event {
+				if p, ok := e.(ProposalEvent); ok && to == 4 {
+					if r := p.Msg.GetBlock().GetRound(); r >= 3 && r < 3+gap {
+						dropped++
+						return nil
+					}
+				}
+				return []Event{e}
+			}
+			s.run(4000 + 40*int(gap))
 
-	if !dropped {
-		t.Fatal("no proposal for round 3 reached replica 4")
+			if dropped == 0 {
+				t.Fatal("no proposal in the gap reached replica 4")
+			}
+			s.checkProgress(int(gap) + 8)
+			s.checkAgreement()
+			s.checkChained()
+		})
 	}
-	s.checkProgress(8, 1, 2, 3)
-	s.checkAgreement()
-	s.checkChained()
 }
 
-// TestReorderedProposalsAreSafe hands replica 4 the proposal for round 3 only
+// TestReorderedProposalsRecover hands replica 4 the proposal for round 3 only
 // after the one for round 4, whose certificate has already moved it past round
-// 3. As with a lost proposal, only the others are held to progress.
-func TestReorderedProposalsAreSafe(t *testing.T) {
+// 3. As with a lost proposal, it must fetch the block and keep committing.
+func TestReorderedProposalsRecover(t *testing.T) {
 	s := newSim(t, 4)
 	var held Event
 	hold := proposalTo(4, 3, func(e Event) []Event { held = e; return nil })
@@ -458,7 +490,7 @@ func TestReorderedProposalsAreSafe(t *testing.T) {
 	if held == nil {
 		t.Fatal("no proposal for round 3 reached replica 4")
 	}
-	s.checkProgress(8, 1, 2, 3)
+	s.checkProgress(8)
 	s.checkAgreement()
 	s.checkChained()
 }
