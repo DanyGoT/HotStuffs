@@ -22,6 +22,7 @@ func (n *recordNet) Vote(v *diempb.VoteMsg, to uint32) {
 	n.voteTo = append(n.voteTo, to)
 }
 func (n *recordNet) Timeout(m *diempb.TimeoutMsg) { n.timeouts = append(n.timeouts, m) }
+func (n *recordNet) RequestBlock([]byte)          {}
 
 var _ Transport = (*recordNet)(nil)
 

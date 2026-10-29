@@ -9,6 +9,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/DanyGoT/HotStuffs/diem"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
@@ -16,6 +17,10 @@ import (
 )
 
 const defaultOutQueue = 1024
+
+// fetchTimeout bounds one block request. A peer that holds the block answers
+// at once, so the bound only matters when none does.
+const fetchTimeout = time.Second
 
 // Config is what the transport and its inbound handlers need.
 type Config struct {
@@ -58,9 +63,8 @@ func (a peerAddr) Addr() string { return string(a) }
 // recovers from, while dropping an event the replica has already accepted is
 // not recoverable.
 //
-// There is no backfill call. DiemBFT §3 defines no block-sync, so a replica
-// that loses a proposal has nothing to ask for; it declines to vote and
-// diem.Safety.DeclinedMissingAncestor counts what that costs.
+// RequestBlock is the one call with a reply, and an addition: DiemBFT §3
+// defines no block-sync. It lets a replica that lost a proposal vote again.
 type Transport struct {
 	srv     *gorums.Server
 	handler *handler
@@ -170,6 +174,29 @@ func (t *Transport) Vote(v *diempb.VoteMsg, to uint32) {
 
 func (t *Transport) Timeout(m *diempb.TimeoutMsg) {
 	t.enqueue(func(cfg gorums.Config) { _ = diempb.Timeout(cfg.Context(t.ctx), m).Send() })
+}
+
+// RequestBlock runs a quorum call to every peer on its own goroutine, so a slow
+// fetch holds up no other send. Any reply whose recomputed id is the one asked
+// for is the block, so the first such reply is sunk and the rest are dropped.
+// First would take the first reply without checking it.
+//
+// The goroutine is not waited for on Stop: like an inbound handler, it may be
+// blocked on a full queue that the stopped loop no longer drains.
+func (t *Transport) RequestBlock(id []byte) {
+	t.enqueue(func(cfg gorums.Config) { go t.fetch(cfg, id) })
+}
+
+func (t *Transport) fetch(cfg gorums.Config, id []byte) {
+	ctx, cancel := context.WithTimeout(t.ctx, fetchTimeout)
+	defer cancel()
+	req := diempb.BlockHash_builder{Id: id}.Build()
+	for r := range diempb.RequestBlock(cfg.Context(ctx), req).Results().IgnoreErrors() {
+		if t.handler.ver.VerifyBlock(r.Value, id) {
+			t.handler.sink(diem.BlockEvent{Block: r.Value})
+			return
+		}
+	}
 }
 
 // node resolves a replica ID to the Gorums node to unicast to, indexing the

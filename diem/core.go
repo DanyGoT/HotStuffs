@@ -186,6 +186,8 @@ func (c *Core) Step(e Event) {
 		if e.Round == c.pacemaker.CurrentRound() {
 			c.pacemaker.LocalTimeoutRound()
 		}
+	case BlockEvent:
+		c.insert(e.Block)
 	case BlockRequestEvent:
 		c.serveBlock(e)
 	}
@@ -232,7 +234,7 @@ func (c *Core) processProposalMsg(p *diempb.ProposalMsg) {
 		return
 	}
 
-	c.tree.ExecuteAndInsert(block)
+	c.insert(block)
 	vote := c.safety.MakeVote(block, p.GetLastRoundTc())
 	if vote == nil {
 		return
@@ -240,6 +242,19 @@ func (c *Core) processProposalMsg(p *diempb.ProposalMsg) {
 	// A vote is unicast to the next round's leader, which is the only replica
 	// that can use it: it is the one that will propose over the certificate.
 	c.net.Vote(vote, c.leaders.GetLeader(round+1))
+}
+
+// insert executes b and adds it to the tree. A block held for a parent this
+// replica never saw asks every peer for the oldest block missing below it:
+// DiemBFT section 3 has no block sync, and without one a single lost or
+// reordered proposal keeps the replica from voting again. The fetched block
+// comes back through insert, so a longer gap is walked back one block at a
+// time, and every new proposal above the gap retries the walk where it stands.
+func (c *Core) insert(b *diempb.Block) {
+	c.tree.ExecuteAndInsert(b)
+	if id := c.ledger.Missing(b.GetId()); id != nil {
+		c.net.RequestBlock(id)
+	}
 }
 
 func (c *Core) processTimeoutMsg(m *diempb.TimeoutMsg) {
