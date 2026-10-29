@@ -69,8 +69,8 @@ type State struct {
 	HighestQCRound   uint64
 
 	// DeclinedMissingAncestor is monotonic. A rate taken over it is the rate at
-	// which this replica lost a vote to a gap in its own chain, which is the
-	// standing cost of the paper having no block-sync.
+	// which this replica lost a vote to a gap in its own chain before block
+	// sync filled it.
 	DeclinedMissingAncestor uint64
 }
 

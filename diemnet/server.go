@@ -18,13 +18,13 @@ import (
 // address, not an identity. Every message therefore carries its sender
 // explicitly and is authenticated by signature, never by connection. That costs
 // little, since BFT requires content authentication regardless, but it is why
-// the ServerContext is unused in all three handlers.
+// the ServerContext is unused in the three one-way handlers.
 //
-// The handlers deliberately do not call ctx.Release(). Gorums processes one
+// Those handlers deliberately do not call ctx.Release(). Gorums processes one
 // sender's requests in receipt order while the handler holds the lock, and that
 // per-sender FIFO is wanted: a leader's proposals must be seen in round order,
-// or a proposal arrives before its parent and, with no block-sync in DiemBFT
-// §3, this replica declines to vote on it for good.
+// or a proposal arrives before its parent and this replica declines to vote
+// until it has fetched the parent.
 type handler struct {
 	ver  *diem.Verifier
 	sink func(diem.Event)

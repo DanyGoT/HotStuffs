@@ -67,10 +67,9 @@ func (t *BlockTree) HighQC() *diempb.QuorumCert { return t.highQC }
 // on every outgoing message so a lagging replica catches up on commits.
 func (t *BlockTree) HighCommitQC() *diempb.QuorumCert { return t.highCommitQC }
 
-// Block returns a pending block by id. The protocol never calls it: the paper's
-// pending_block_tree (3.3) is read only by prune. It is kept as the one read
-// path into the tree — what a block-sync responder would serve from, and what
-// the pruning tests assert against.
+// Block returns a pending block by id. The paper's pending_block_tree (3.3) is
+// read only by prune; here it is also what Core.serveBlock answers a peer's
+// block request from.
 func (t *BlockTree) Block(id []byte) (*diempb.Block, bool) {
 	b, ok := t.pending[string(id)]
 	return b, ok

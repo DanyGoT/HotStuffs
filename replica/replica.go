@@ -73,7 +73,7 @@ type Replica struct {
 
 	// declined mirrors diem.State.DeclinedMissingAncestor out of the loop
 	// goroutine, which is the only way to read it: the core's state is not
-	// shared. It is the standing cost of DiemBFT 3 having no block-sync.
+	// shared. It counts the votes lost while a missing block was fetched.
 	declined atomic.Uint64
 
 	measure benchkit.Options
@@ -170,8 +170,8 @@ func (r *Replica) commit(b *diempb.Block) {
 // Run serves the transport, waits for every peer, then runs the consensus loop
 // until ctx is done or Measure.Duration has passed. Waiting for peers before
 // the first round matters: a proposal multicast into a half-connected
-// configuration is simply lost, and with no block-sync in DiemBFT 3 the
-// replicas that missed it never get it back. Cancelling ctx is how a replica
+// configuration is simply lost, and the replicas that missed it must fetch it
+// before they can vote again. Cancelling ctx is how a replica
 // stops; the transport is shut down after the loop, never before.
 func (r *Replica) Run(ctx context.Context) error {
 	r.net.Start()
@@ -249,9 +249,9 @@ func (r *Replica) Commands() uint64 {
 func (r *Replica) Counters() diemnet.Counters { return r.net.Counters() }
 
 // DeclinedMissingAncestor is how many votes this replica withheld because it
-// never saw a block's ancestry. DiemBFT 3 defines no way to fetch the missing
-// block, so a replica that loses one proposal cannot vote on its descendants
-// either; this is the number that says what that costs.
+// had not yet seen a block's ancestry. Until it has fetched the missing block,
+// a replica that loses one proposal cannot vote on its descendants either; this
+// is the number that says what that costs.
 func (r *Replica) DeclinedMissingAncestor() uint64 { return r.declined.Load() }
 
 // QueueHighWater is the deepest the inbound event queue has been, which is what
