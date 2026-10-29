@@ -92,6 +92,10 @@ message TimeoutInfo {
   Signature sig = 4;
 }
 
+message BlockHash {
+  bytes id = 1;
+}
+
 message TimeoutMsg {
   TimeoutInfo tmo_info = 1;
   TimeoutCert last_round_tc = 2;
@@ -116,5 +120,11 @@ service Diem {
 
   rpc Timeout(TimeoutMsg) returns (google.protobuf.Empty) {
     option (gorums.multicast) = true;
+  }
+
+  // A quorum call, not a unicast: a unicast has no reply, and asking every
+  // peer means one slow or Byzantine peer cannot hold the fetch up.
+  rpc RequestBlock(BlockHash) returns (Block) {
+    option (gorums.quorumcall) = true;
   }
 }

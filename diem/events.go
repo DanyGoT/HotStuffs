@@ -22,10 +22,18 @@ type TimeoutEvent struct{ Msg *diempb.TimeoutMsg }
 // LocalTimeoutEvent is this replica's own round timer firing.
 type LocalTimeoutEvent struct{ Round uint64 }
 
+// BlockRequestEvent is a peer asking for a block by id. The core sends the
+// block, or nil if it holds none, on Reply, which must have room for it.
+type BlockRequestEvent struct {
+	ID    []byte
+	Reply chan<- *diempb.Block
+}
+
 func (ProposalEvent) event()     {}
 func (VoteEvent) event()         {}
 func (TimeoutEvent) event()      {}
 func (LocalTimeoutEvent) event() {}
+func (BlockRequestEvent) event() {}
 
 // Queue is the inbound event queue: bounded and blocking, so a producer waits
 // rather than an accepted event being dropped.

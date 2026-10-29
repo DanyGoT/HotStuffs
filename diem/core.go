@@ -19,6 +19,7 @@ type Core struct {
 
 	transactions func() [][]byte
 
+	ledger    *MemLedger
 	tree      *BlockTree
 	safety    *Safety
 	pacemaker *Pacemaker
@@ -108,6 +109,7 @@ func New(cfg Config) *Core {
 
 		transactions: cfg.Transactions,
 
+		ledger:    cfg.Ledger,
 		tree:      tree,
 		safety:    safety,
 		pacemaker: pacemaker,
@@ -184,7 +186,19 @@ func (c *Core) Step(e Event) {
 		if e.Round == c.pacemaker.CurrentRound() {
 			c.pacemaker.LocalTimeoutRound()
 		}
+	case BlockRequestEvent:
+		c.serveBlock(e)
 	}
+}
+
+// serveBlock answers from the pending tree, then from the committed blocks a
+// lagging peer may still be missing.
+func (c *Core) serveBlock(r BlockRequestEvent) {
+	b, ok := c.tree.Block(r.ID)
+	if !ok {
+		b, _ = c.ledger.CommittedBlock(r.ID)
+	}
+	r.Reply <- b
 }
 
 // processCertificateQC is the paper's process_certificate_qc. The order

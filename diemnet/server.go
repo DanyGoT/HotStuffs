@@ -1,6 +1,7 @@
 package diemnet
 
 import (
+	"errors"
 	"sync/atomic"
 
 	"github.com/DanyGoT/HotStuffs/diem"
@@ -55,4 +56,24 @@ func (h *handler) Timeout(_ gorums.ServerContext, in *diempb.TimeoutMsg) {
 		return
 	}
 	h.sink(diem.TimeoutEvent{Msg: in})
+}
+
+var errNoBlock = errors.New("diemnet: block not held")
+
+// RequestBlock is answered by the consensus goroutine, which owns the blocks.
+// The stream is released once the request is queued, so a slow answer does not
+// hold up this sender's later messages, and FIFO into the queue is kept.
+func (h *handler) RequestBlock(ctx gorums.ServerContext, in *diempb.BlockHash) (*diempb.Block, error) {
+	reply := make(chan *diempb.Block, 1)
+	h.sink(diem.BlockRequestEvent{ID: in.GetId(), Reply: reply})
+	ctx.Release()
+	select {
+	case b := <-reply:
+		if b == nil {
+			return nil, errNoBlock
+		}
+		return b, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
