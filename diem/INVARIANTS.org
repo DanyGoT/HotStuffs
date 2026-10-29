@@ -125,9 +125,11 @@ Lemma numbers here are DiemBFT's.
 - No persistence: =highest_vote_round= / =highest_qc_round= are in memory only, so a
   restart can violate Lemma 2 and Property 1 (paper: =save_consensus_state=;
   =pacemaker.go:LocalTimeoutRound= notes the omission).
-- No block-sync: =safety.go:MakeVote= declines when an ancestor was never speculated
-  (=DeclinedMissingAncestor=), so Lemma 7 (honest leader's proposal gets a vote) and the
-  Lemma 9 / Property 4 timing bounds do not hold under reordering or loss.
+- Block sync is an addition (=core.go:insert=): a replica missing an ancestor fetches it
+  and votes again from the next proposal, but =safety.go:MakeVote= declines the one in
+  hand (=DeclinedMissingAncestor=). So Lemma 7 (honest leader's proposal gets a vote) and
+  the Lemma 9 / Property 4 timing bounds do not hold under reordering or loss for that
+  round.
 - =QuorumSize= is ceil((n+f+1)/2), equal to 2f+1 only when n = 3f+1; for other n it
   is above it, safe but not what the paper's liveness counts assume.
 - Genesis QC carries no quorum: a round-0 certificate is accepted only as the exact

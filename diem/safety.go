@@ -40,8 +40,8 @@ func (s *Safety) HighestVoteRound() uint64 { return s.highestVoteRound }
 func (s *Safety) HighestQCRound() uint64 { return s.highestQCRound }
 
 // DeclinedMissingAncestor counts the votes withheld because the block's
-// ancestry was never speculated. It is monotonic, and it is the only measure of
-// what having no block-sync costs: see MemLedger.Speculate.
+// ancestry was not yet speculated. It is monotonic, and it measures what a gap
+// costs before block sync fills it: see MemLedger.Speculate.
 func (s *Safety) DeclinedMissingAncestor() uint64 { return s.declinedMissingAncestor }
 
 func (s *Safety) increaseHighestVoteRound(round uint64) {
@@ -121,8 +121,8 @@ func (s *Safety) MakeVote(b *diempb.Block, lastTC *diempb.TimeoutCert) *diempb.V
 	// The paper puts this lookup inside the vote and would sign a bottom
 	// execution state when it fails. Declining instead: a vote is a claim
 	// about an execution result, and a replica that could not execute the
-	// block — because it never saw an ancestor, and the paper has no
-	// block-sync — has no result to claim.
+	// block — because it has not yet fetched an ancestor — has no result to
+	// claim.
 	exec, ok := s.ledger.PendingState(b.GetId())
 	if !ok {
 		s.declinedMissingAncestor++

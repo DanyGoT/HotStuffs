@@ -155,9 +155,9 @@ func TestClusterCommitsIdenticalPrefix(t *testing.T) {
 			// peer or a bad key), not a protocol-level fault.
 			t.Errorf("replica %d: Counters = %+v, want zero OutboundDropped and Rejected", r.ID(), c)
 		}
-		// Not an assertion: with no block-sync, a replica that misses a
-		// proposal declines to vote on its descendants, and the rate is what
-		// the report quotes about that gap.
+		// Not an assertion: a replica that misses a proposal declines to vote
+		// on its descendants until it has fetched it, and the rate is what the
+		// report quotes about that gap.
 		t.Logf("replica %d: committed %d, declined for a missing ancestor %d, queue high-water %d",
 			r.ID(), len(r.Log()), r.DeclinedMissingAncestor(), r.QueueHighWater())
 	}

@@ -8,8 +8,10 @@
 
 * Limits
 
-- No block sync. DiemBFT section 3 defines none, so a replica that misses a
-  proposal declines to vote on its descendants (counted in =diem/core.go:DeclinedMissingAncestor=).
+- Block sync is one block per request. A gap is walked back one block at a time
+  while the chain keeps growing, and peers keep 512 committed blocks
+  (=diem/ledger.go:History=). In the sim, a replica that misses 256 consecutive
+  proposals or more never catches up; that needs state sync.
 - =highest_vote_round= is not persisted. =diem/pacemaker.go:LocalTimeoutRound= has
   no =save_consensus_state()=, so a restarted replica can vote twice in a round.
 - Keys are seeded. Without =-keys=, every replica derives the same insecure key

@@ -123,11 +123,10 @@ result under the block id.
 - Differs :: two things. The signature takes the whole =*Block= rather than the
   paper's three fields — all three are fields of the block, and
   =committed_block= must hand a whole block back, so the ledger holds it
-  regardless. And a parent this replica never speculated stores *nothing* and
-  returns the zero state. That is where the paper's missing
-  block-sync lands: section 3 defines no way to fetch a block, so a replica
-  that loses one proposal cannot speculate it, cannot vote on it, and cannot
-  speculate its children either.
+  regardless. And a parent this replica never speculated returns the zero
+  state, and the block is held (=ledger.go:held=) until the parent arrives,
+  then speculated with it. Section 3 defines no way to fetch a block; the
+  block sync below is what fetches the parent.
 
 ** pending_state(block_id)
 
@@ -317,9 +316,9 @@ build the =VoteInfo= and =LedgerCommitInfo= and sign the latter.
   and would sign a bottom execution state when the lookup fails. =MakeVote=
   declines instead, and counts the decline. A vote is a claim about an
   execution result, and a replica that could not execute the block — because it
-  never saw an ancestor, and the paper has no block-sync — has no result to
-  claim. Note the ordering consequence: the counters move only on the path that
-  produces a vote, so a declined vote does not burn the round.
+  has not yet fetched an ancestor — has no result to claim. Note the ordering
+  consequence: the counters move only on the path that produces a vote, so a
+  declined vote does not burn the round.
 
 ** make_timeout(round, high_qc, last_tc)
 
@@ -524,9 +523,20 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
 - The missing-ancestor counter :: =safety.go:declinedMissingAncestor= and its
   accessor =DeclinedMissingAncestor=, incremented in =MakeVote= and surfaced
   through =core.go:State=, whose =DeclinedMissingAncestor= field copies it.
-  Section 3 has no block-sync and none was added; this counter is the price tag.
-  It is the number the report should quote about the gap, rather than an
-  argument about whether section 3 is livelocked in principle.
+  It counts the votes a replica declines before block sync fills a gap. It is
+  the number the report should quote about the gap, rather than an argument
+  about whether section 3 is livelocked in principle.
+- Block sync :: =core.go:insert= and =serveBlock=, =ledger.go:Missing=,
+  =verify.go:VerifyBlock=, =events.go:BlockEvent= and =BlockRequestEvent=, the
+  =RequestBlock= quorum call over =diem.proto:BlockHash=, and
+  =diemnet/gorums.go:RequestBlock=.
+  Section 3 defines no way to fetch a block. A block whose parent this replica
+  never speculated is held, and the oldest block missing below it is requested
+  from every peer. The first reply whose recomputed id matches is the block,
+  since the id came from a verified certificate. A fetched block goes through =insert= too, so a longer
+  gap is walked back one block at a time, down to the commit frontier. Peers
+  are answered on the consensus goroutine, from the pending tree or the
+  committed blocks.
 - Retention :: =ledger.go:History= and =forget=.
   The paper's ledger is unbounded; =committed_block= must still answer for
   everything =elect_reputation_leader= walks back over, so the bound is what

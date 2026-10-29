@@ -99,30 +99,34 @@ step through while reading and buys nothing.
 
 * How it uses Gorums
 
-=proto/diempb/diem.proto= defines three RPCs, and deliberately no
-fourth:
+=proto/diempb/diem.proto= defines four RPCs:
 
 #+begin_example protobuf
-rpc Proposal(ProposalMsg) returns (Empty) { option (gorums.multicast) = true; }
-rpc Vote(VoteMsg)         returns (Empty) { option (gorums.unicast)   = true; }
-rpc Timeout(TimeoutMsg)   returns (Empty) { option (gorums.multicast) = true; }
+rpc Proposal(ProposalMsg)   returns (Empty) { option (gorums.multicast)  = true; }
+rpc Vote(VoteMsg)           returns (Empty) { option (gorums.unicast)    = true; }
+rpc Timeout(TimeoutMsg)     returns (Empty) { option (gorums.multicast)  = true; }
+rpc RequestBlock(BlockHash) returns (Block) { option (gorums.quorumcall) = true; }
 #+end_example
 
 Votes are *unicast*: DiemBFT 3.1 sends a vote to the leader of the next round
 alone, because that leader is the only replica that will propose over the
 certificate.
 
-There is no =Fetch=. Section 3 specifies no block-sync, and none was added, so
-a replica that misses an ancestor cannot speculate and declines to vote until
-the chain catches up with it. =Safety.DeclinedMissingAncestor()= counts exactly
-those declines, which is what makes the gap measurable rather than
-hypothetical.
+=RequestBlock= is block sync, which section 3 does not specify. A replica that
+misses an ancestor cannot speculate, so it holds the block and asks every peer
+for the oldest block missing below it (=core.go:insert=). It is a *quorum call*: a unicast has no
+reply, and asking every peer means one slow or Byzantine peer cannot hold the
+fetch up. The replies are read with =Results()=, and the first block whose
+recomputed id is the one asked for is taken (=verify.go:VerifyBlock=); =First()=
+would take the first reply unchecked. The replica still declines the vote in
+hand and votes again from the next proposal. =Safety.DeclinedMissingAncestor()=
+counts those declines, which is what makes the gap measurable.
 
 It is not rare. Message *reordering alone*, with nothing dropped and nothing
 malformed, is enough to trigger it: Gorums gives per-sender FIFO, but rounds
 rotate leaders, so consecutive proposals arrive from different senders on
 different handler goroutines. Seeing round r+1's certificate before round r's
-proposal is enough to strand the replica.
+proposal is enough to send the replica fetching.
 
 Certificate signature sets travel in strictly increasing signer order. A block
 id covers the signature slice byte for byte, so permuting it would change the

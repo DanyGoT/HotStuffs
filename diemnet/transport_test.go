@@ -714,7 +714,7 @@ func TestClusterCommitsOverGorums(t *testing.T) {
 	}
 	for i, nd := range nodes {
 		if got := nd.core.State().DeclinedMissingAncestor; got != 0 {
-			t.Logf("replica %d declined %d votes for a missing ancestor: DiemBFT 3 has no block-sync, so this is the standing cost", i+1, got)
+			t.Logf("replica %d declined %d votes for a missing ancestor, lost while it was fetched", i+1, got)
 		}
 	}
 }
