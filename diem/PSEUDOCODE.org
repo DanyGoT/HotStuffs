@@ -376,14 +376,16 @@ Build this replica's timeout for the current round and broadcast it.
 - Implemented :: =pacemaker.go:LocalTimeoutRound=.
 - Differs :: four things.
   1. =save_consensus_state()= is absent — see *Procedures with no counterpart*.
-  2. It returns when =MakeTimeout= declines. The paper
-     broadcasts a =TimeoutMsg= built around the result unconditionally.
+  2. It skips the broadcast when =MakeTimeout= declines, but still re-arms.
+     The paper broadcasts a =TimeoutMsg= built around the result
+     unconditionally.
   3. It passes =lastRoundTC= through =justifyingTC=, for the
      same reason and by the same rule as the proposal path. See *Where the
      paper is self-contradictory*, item 3.
-  4. It re-arms the timer. The paper stops it and waits for a
-     TC, which leaves a replica whose broadcast was lost with no timer at all;
-     here the timeout is retransmitted until a QC or a TC moves the round.
+  4. It re-arms the timer, first and always. The paper stops it and waits for
+     a TC, which leaves a replica whose broadcast was lost or refused with no
+     timer at all; here the timeout is retried until a QC or a TC moves the
+     round.
 
 ** process_remote_timeout(tmo)
 

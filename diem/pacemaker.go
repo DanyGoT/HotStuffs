@@ -96,6 +96,11 @@ func (p *Pacemaker) startTimer(newRound uint64) {
 // The paper's save_consensus_state() has no counterpart here: the two counters
 // it would persist live in Safety, and this prototype keeps no durable state.
 func (p *Pacemaker) LocalTimeoutRound() {
+	// Re-arm first, whatever Safety decides. The paper (3.5,
+	// local_timeout_round) stops the timer and relies on a TC arriving; a
+	// replica whose broadcast is lost or refused would then sit with no timer
+	// at all, so the timeout is retried until a QC or a TC moves the round.
+	p.startTimer(p.currentRound)
 	info := p.safety.MakeTimeout(p.currentRound, p.tree.HighQC(), p.lastRoundTC)
 	if info == nil {
 		return
@@ -111,10 +116,6 @@ func (p *Pacemaker) LocalTimeoutRound() {
 		LastRoundTc:  justifyingTC(QCRound(info.GetHighQc()), info.GetRound(), p.lastRoundTC),
 		HighCommitQc: p.tree.HighCommitQC(),
 	}.Build())
-	// Re-arm. The paper stops the timer here and relies on a TC arriving; a
-	// replica whose broadcast is lost would then sit with no timer at all, so
-	// the timeout is retransmitted until a QC or a TC moves the round.
-	p.startTimer(p.currentRound)
 }
 
 // ProcessRemoteTimeout accumulates tmo and returns the certificate it
