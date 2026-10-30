@@ -188,18 +188,43 @@ func TestCoreAmplifiesTimeouts(t *testing.T) {
 	}
 }
 
-// TestCoreIgnoresStaleRoundTimer covers the guard on the local timer: a
-// callback enqueued for a round that has since been left behind must not make
-// the replica give up on the round it is in now.
-func TestCoreIgnoresStaleRoundTimer(t *testing.T) {
+// TestCoreIgnoresStaleTimer covers the guard on the local timer: a callback
+// enqueued by a timer that has since been disarmed must not make the replica
+// give up on the round it is in now.
+func TestCoreIgnoresStaleTimer(t *testing.T) {
 	f := newCoreFixture(t)
-	f.core.Step(LocalTimeoutEvent{Round: 0})
+	epoch := f.core.pacemaker.Epoch()
+	f.core.Step(LocalTimeoutEvent{Epoch: epoch - 1})
 	if len(f.net.timeouts) != 0 {
 		t.Fatal("timed out on a stale timer event")
 	}
-	f.core.Step(LocalTimeoutEvent{Round: 1})
+	f.core.Step(LocalTimeoutEvent{Epoch: epoch})
 	if len(f.net.timeouts) != 1 {
-		t.Fatalf("broadcast %d timeouts for the current round, want 1", len(f.net.timeouts))
+		t.Fatalf("broadcast %d timeouts for the armed timer, want 1", len(f.net.timeouts))
+	}
+}
+
+// TestCoreIgnoresTimerRearmedInSameRound is the stale event the round cannot
+// tell apart: the timer fires, then f+1 remote timeouts re-arm the same round
+// before the queued event is stepped.
+func TestCoreIgnoresTimerRearmedInSameRound(t *testing.T) {
+	f := newCoreFixture(t)
+	f.core.clock.(*fakeClock).Advance(100 * time.Millisecond)
+	if len(*f.events) != 1 {
+		t.Fatalf("setup: the round-1 timer pushed %d events, want 1", len(*f.events))
+	}
+	stale := (*f.events)[0]
+
+	for _, from := range []uint32{1, 3} { // f+1 = 2 distinct senders
+		f.core.Step(TimeoutEvent{Msg: timeoutFrom(t, from)})
+	}
+	if len(f.net.timeouts) != 1 {
+		t.Fatalf("setup: broadcast %d timeouts after f+1 remote ones, want 1", len(f.net.timeouts))
+	}
+
+	f.core.Step(stale)
+	if len(f.net.timeouts) != 1 {
+		t.Fatalf("broadcast %d timeouts after a disarmed timer's event, want 1", len(f.net.timeouts))
 	}
 }
 
@@ -227,14 +252,14 @@ func TestCoreStopDisarmsTimer(t *testing.T) {
 
 func TestQueueDeliversEvents(t *testing.T) {
 	q := NewQueue(2)
-	q.Push(LocalTimeoutEvent{Round: 3})
+	q.Push(LocalTimeoutEvent{Epoch: 3})
 	e, ok := <-q
 	if !ok {
 		t.Fatal("queue closed")
 	}
 	lt, ok := e.(LocalTimeoutEvent)
-	if !ok || lt.Round != 3 {
-		t.Fatalf("received %#v, want LocalTimeoutEvent for round 3", e)
+	if !ok || lt.Epoch != 3 {
+		t.Fatalf("received %#v, want LocalTimeoutEvent for epoch 3", e)
 	}
 }
 
