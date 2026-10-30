@@ -94,7 +94,7 @@ Terse restatement of what the DiemBFT proofs need. Code pointers are
 | leader extends high_qc | block built over highest QC, which absorbs every received timeout's high_qc; high_qc never lowers | =blocktree.go:GenerateBlock=, =ProcessQC=, =core.go:processTimeoutMsg=, =processNewRoundEvent= |
 | round entry | enter qc.round+1 / tc.round+1, never backwards | =pacemaker.go:AdvanceRoundQC=, =AdvanceRoundTC= |
 | Bracha amplification | f+1 timeouts for r => time out of r; quorum => TC; counted once per sender | =pacemaker.go:ProcessRemoteTimeout= |
-| round timer | paper: 4\Delta or \alpha+\beta commit_gap; code: capped backoff, grown on timeout, reset on QC | =pacemaker.go:LocalTimeoutRound=, =AdvanceRoundQC=, =Backoff= |
+| round timer | paper: 4\Delta or \alpha+\beta commit_gap; code: capped backoff, grown on entering a round on a TC, reset on QC | =pacemaker.go:AdvanceRoundTC=, =AdvanceRoundQC=, =Backoff= |
 | leader election | reputation path only on fresh 2-chain QC; else round-robin, two rounds per leader | =leader.go:UpdateLeaders=, =GetLeader=, =electReputationLeader=, =pick= |
 | deterministic ledger | speculate/commit deterministic; commit prunes forks below | =ledger.go:Speculate=, =Commit= |
 

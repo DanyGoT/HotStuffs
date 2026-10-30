@@ -95,7 +95,6 @@ func (p *Pacemaker) startTimer(newRound uint64) {
 // The paper's save_consensus_state() has no counterpart here: the two counters
 // it would persist live in Safety, and this prototype keeps no durable state.
 func (p *Pacemaker) LocalTimeoutRound() {
-	p.dur.Grow()
 	info := p.safety.MakeTimeout(p.currentRound, p.tree.HighQC(), p.lastRoundTC)
 	if info == nil {
 		return
@@ -173,6 +172,7 @@ func (p *Pacemaker) AdvanceRoundTC(tc *diempb.TimeoutCert) bool {
 	if tc == nil || tc.GetRound() < p.currentRound {
 		return false
 	}
+	p.dur.Grow()
 	p.lastRoundTC = tc
 	p.startTimer(tc.GetRound() + 1)
 	return true
@@ -192,7 +192,8 @@ func (p *Pacemaker) AdvanceRoundQC(qc *diempb.QuorumCert) bool {
 }
 
 // Backoff is the round timer's duration: it grows by a factor on every
-// consecutive timeout, capped at max, and resets when a round succeeds.
+// consecutive round that ends on a TC, capped at max, and resets when a round
+// succeeds.
 // DiemBFT 3.5 get_round_timer gives 4Δ or α+β·commit_gap instead; growth stands
 // in for a configured Δ, so liveness (Lemma 8) needs max above a round's time
 // after GST.

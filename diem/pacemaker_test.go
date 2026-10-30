@@ -314,6 +314,27 @@ func TestLocalTimeoutRoundDropsRedundantTC(t *testing.T) {
 	}
 }
 
+// TestBackoffGrowsOncePerFailedRound: retransmitting a round's timeout must not
+// grow the timer; the round ending on a TC grows it once.
+func TestBackoffGrowsOncePerFailedRound(t *testing.T) {
+	pm, _, _, _ := newTestPacemaker(t, 4) // backoff factor 2
+	base := pm.dur.Duration()
+	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
+		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
+	}
+
+	for range 3 {
+		pm.LocalTimeoutRound()
+	}
+	if !pm.AdvanceRoundTC(makeTC(1)) {
+		t.Fatal("setup: AdvanceRoundTC(round 1) should have entered round 2")
+	}
+
+	if got, want := pm.dur.Duration(), 2*base; got != want {
+		t.Fatalf("Duration() = %v after one failed round, want %v", got, want)
+	}
+}
+
 func TestBackoffGrowsThenResets(t *testing.T) {
 	base, max, factor := 10*time.Millisecond, 80*time.Millisecond, 2.0
 	d := NewBackoff(base, max, factor)
