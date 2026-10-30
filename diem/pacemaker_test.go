@@ -335,6 +335,31 @@ func TestBackoffGrowsOncePerFailedRound(t *testing.T) {
 	}
 }
 
+// TestLocalTimeoutRoundRearmsWhenRefused: a round whose timeout Safety refuses
+// must still keep a timer, or the replica waits on it forever. Round 5 is
+// entered on a QC the tree never saw, so high_qc stays at genesis and
+// MakeTimeout declines.
+func TestLocalTimeoutRoundRearmsWhenRefused(t *testing.T) {
+	pm, clock, net, events := newTestPacemaker(t, 4)
+	if !pm.AdvanceRoundQC(bareQC(nil, 4)) {
+		t.Fatal("setup: AdvanceRoundQC(round 4) should have entered round 5")
+	}
+	clock.Advance(pm.dur.Duration())
+	if len(*events) != 1 {
+		t.Fatalf("setup: the round timer pushed %d events, want 1", len(*events))
+	}
+
+	pm.LocalTimeoutRound()
+	if len(net.timeouts) != 0 {
+		t.Fatalf("setup: broadcast %d timeouts, want MakeTimeout to refuse", len(net.timeouts))
+	}
+
+	clock.Advance(pm.dur.Duration())
+	if len(*events) != 2 {
+		t.Fatalf("no timer re-armed after a refused timeout: %d events, want 2", len(*events))
+	}
+}
+
 func TestBackoffGrowsThenResets(t *testing.T) {
 	base, max, factor := 10*time.Millisecond, 80*time.Millisecond, 2.0
 	d := NewBackoff(base, max, factor)
