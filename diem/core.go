@@ -177,13 +177,14 @@ func (c *Core) Step(e Event) {
 		c.processTimeoutMsg(e.Msg)
 	case LocalTimeoutEvent:
 		// The paper dispatches this unconditionally (3.1, start_event_processing:
-		// local timeout -> Pacemaker.local_timeout_round()). The round is checked
+		// local timeout -> Pacemaker.local_timeout_round()). The epoch is checked
 		// first because the timer callback runs off this goroutine and only
 		// enqueues: a callback that had already fired when startTimer or Stop
-		// disarmed the timer is still sitting in the queue, and running it would
+		// disarmed the timer is still sitting in the queue. Running it would
 		// abandon a round the replica has since entered on a perfectly good
-		// certificate.
-		if e.Round == c.pacemaker.CurrentRound() {
+		// certificate, or time out a re-armed round a second time. The round
+		// cannot tell the second case apart; the epoch can.
+		if e.Epoch == c.pacemaker.Epoch() {
 			c.pacemaker.LocalTimeoutRound()
 		}
 	case BlockEvent:

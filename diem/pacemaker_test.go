@@ -148,7 +148,7 @@ func TestAdvanceRoundTCEntersNextRoundAndRecordsTC(t *testing.T) {
 	}
 }
 
-func TestStartTimerPushesLocalTimeoutEventForItsOwnRound(t *testing.T) {
+func TestStartTimerPushesLocalTimeoutEventForItsOwnEpoch(t *testing.T) {
 	pm, clock, _, events := newTestPacemaker(t, 4)
 	pm.startTimer(7)
 
@@ -161,8 +161,8 @@ func TestStartTimerPushesLocalTimeoutEventForItsOwnRound(t *testing.T) {
 	if !ok {
 		t.Fatalf("event type = %T, want LocalTimeoutEvent", (*events)[0])
 	}
-	if ev.Round != 7 {
-		t.Fatalf("LocalTimeoutEvent.Round = %d, want 7", ev.Round)
+	if ev.Epoch != pm.Epoch() {
+		t.Fatalf("LocalTimeoutEvent.Epoch = %d, want the armed timer's %d", ev.Epoch, pm.Epoch())
 	}
 }
 
@@ -267,6 +267,19 @@ func TestProcessRemoteTimeoutQuorumFormsValidTC(t *testing.T) {
 	}
 }
 
+// TestProcessRemoteTimeoutSingleReplicaFormsTC covers n=1, where f+1 and the
+// quorum are both 1: the one timeout must both amplify and complete the TC.
+func TestProcessRemoteTimeoutSingleReplicaFormsTC(t *testing.T) {
+	pm, _, _, _ := newTestPacemaker(t, 1)
+	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
+		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
+	}
+
+	if tc := pm.ProcessRemoteTimeout(timeoutMsg(timeoutInfoFrom(t, 1, 1, 1, 0))); tc == nil {
+		t.Fatal("no TC formed with n=1, where one timeout is a quorum")
+	}
+}
+
 // TestLocalTimeoutRoundDropsRedundantTC pins a gap between two parts of the
 // paper. local_timeout_round (3.5) broadcasts last_round_tc unconditionally,
 // but the well-formedness rule says a round-r message carries the TC of r-1
@@ -298,6 +311,52 @@ func TestLocalTimeoutRoundDropsRedundantTC(t *testing.T) {
 	if m := net.timeouts[0]; !WellFormedTimeout(m) {
 		t.Fatalf("broadcast an ill-formed timeout: round %d over a high_qc for round %d, carrying a TC for round %d; every honest replica discards it",
 			m.GetTmoInfo().GetRound(), QCRound(m.GetTmoInfo().GetHighQc()), m.GetLastRoundTc().GetRound())
+	}
+}
+
+// TestBackoffGrowsOncePerFailedRound: retransmitting a round's timeout must not
+// grow the timer; the round ending on a TC grows it once.
+func TestBackoffGrowsOncePerFailedRound(t *testing.T) {
+	pm, _, _, _ := newTestPacemaker(t, 4) // backoff factor 2
+	base := pm.dur.Duration()
+	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
+		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
+	}
+
+	for range 3 {
+		pm.LocalTimeoutRound()
+	}
+	if !pm.AdvanceRoundTC(makeTC(1)) {
+		t.Fatal("setup: AdvanceRoundTC(round 1) should have entered round 2")
+	}
+
+	if got, want := pm.dur.Duration(), 2*base; got != want {
+		t.Fatalf("Duration() = %v after one failed round, want %v", got, want)
+	}
+}
+
+// TestLocalTimeoutRoundRearmsWhenRefused: a round whose timeout Safety refuses
+// must still keep a timer, or the replica waits on it forever. Round 5 is
+// entered on a QC the tree never saw, so high_qc stays at genesis and
+// MakeTimeout declines.
+func TestLocalTimeoutRoundRearmsWhenRefused(t *testing.T) {
+	pm, clock, net, events := newTestPacemaker(t, 4)
+	if !pm.AdvanceRoundQC(bareQC(nil, 4)) {
+		t.Fatal("setup: AdvanceRoundQC(round 4) should have entered round 5")
+	}
+	clock.Advance(pm.dur.Duration())
+	if len(*events) != 1 {
+		t.Fatalf("setup: the round timer pushed %d events, want 1", len(*events))
+	}
+
+	pm.LocalTimeoutRound()
+	if len(net.timeouts) != 0 {
+		t.Fatalf("setup: broadcast %d timeouts, want MakeTimeout to refuse", len(net.timeouts))
+	}
+
+	clock.Advance(pm.dur.Duration())
+	if len(*events) != 2 {
+		t.Fatalf("no timer re-armed after a refused timeout: %d events, want 2", len(*events))
 	}
 }
 

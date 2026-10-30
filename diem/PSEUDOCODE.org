@@ -36,11 +36,13 @@ construction and needs no default case.
 - Implemented :: =core.go:Step=; the event set is =events.go:Event= with its
   four members.
 - Differs :: the paper dispatches a local timeout unconditionally. =Step=
-  runs =Pacemaker.LocalTimeoutRound= only when the event's =Round= is still
-  =Pacemaker.CurrentRound()=. The timer callback runs off the consensus
-  goroutine and only enqueues, so a callback that had already fired when
-  =startTimer= or =Stop= disarmed the timer is still sitting in the queue;
-  running it would abandon a round the replica entered on a good certificate.
+  runs =Pacemaker.LocalTimeoutRound= only when the event's =Epoch= is still
+  =Pacemaker.Epoch()=, which every =Stop= moves on. The timer callback runs off
+  the consensus goroutine and only enqueues, so a callback that had already
+  fired when =startTimer= or =Stop= disarmed the timer is still sitting in the
+  queue. Running it would abandon a round the replica entered on a good
+  certificate, or time out a round re-armed by Bracha amplification a second
+  time; a round number cannot tell the second case apart.
 
 ** process_certificate_qc(qc)
 
@@ -346,7 +348,8 @@ The paper leaves the formula open — "4*delta, or alpha + beta*commit_gap(r) if
 delta is unknown".
 
 - Implemented :: delegated to an exponential backoff, =pacemaker.go:Backoff=,
-  read in =startTimer= and fed by =Grow= and =Reset=.
+  read in =startTimer=, grown by =AdvanceRoundTC= once per round that ended on
+  a TC, and reset by =AdvanceRoundQC=.
 - Differs :: a choice within the paper's latitude rather than a deviation.
   There is no =Pacemaker= method of this name; the policy is a field.
 
@@ -373,14 +376,16 @@ Build this replica's timeout for the current round and broadcast it.
 - Implemented :: =pacemaker.go:LocalTimeoutRound=.
 - Differs :: four things.
   1. =save_consensus_state()= is absent — see *Procedures with no counterpart*.
-  2. It returns when =MakeTimeout= declines. The paper
-     broadcasts a =TimeoutMsg= built around the result unconditionally.
+  2. It skips the broadcast when =MakeTimeout= declines, but still re-arms.
+     The paper broadcasts a =TimeoutMsg= built around the result
+     unconditionally.
   3. It passes =lastRoundTC= through =justifyingTC=, for the
      same reason and by the same rule as the proposal path. See *Where the
      paper is self-contradictory*, item 3.
-  4. It re-arms the timer. The paper stops it and waits for a
-     TC, which leaves a replica whose broadcast was lost with no timer at all;
-     here the timeout is retransmitted until a QC or a TC moves the round.
+  4. It re-arms the timer, first and always. The paper stops it and waits for
+     a TC, which leaves a replica whose broadcast was lost or refused with no
+     timer at all; here the timeout is retried until a QC or a TC moves the
+     round.
 
 ** process_remote_timeout(tmo)
 
@@ -388,7 +393,8 @@ Accumulate a timeout for a round not already behind us; at f+1 senders time out
 locally as well (Bracha amplification), at 2f+1 return the TC.
 
 - Implemented :: =pacemaker.go:ProcessRemoteTimeout=; the
-  thresholds are the =faulty+1= and =quorum= cases of its switch.
+  thresholds are its two separate tests, =faulty+1= then =quorum=. With n=1 both
+  are 1, and the one timeout passes both.
 - Differs :: two things.
   1. It returns early on a duplicate sender. The paper puts its
      two count tests *outside* the duplicate guard, and re-adding a sender to a
@@ -405,7 +411,8 @@ locally as well (Bracha amplification), at 2f+1 return the TC.
 ** advance_round_tc(tc)
 
 - Implemented :: =pacemaker.go:AdvanceRoundTC=.
-- Faithful :: no deviation.
+- Faithful :: no deviation. The =Grow= call in =AdvanceRoundTC= is
+  =get_round_timer='s business, not the round logic's.
 
 ** advance_round_qc(qc)
 

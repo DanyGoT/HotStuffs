@@ -27,6 +27,7 @@ type Pacemaker struct {
 	lastRoundTC     *diempb.TimeoutCert
 	pendingTimeouts map[uint64]*timeoutBucket
 	timer           Timer
+	epoch           uint64
 }
 
 // timeoutBucket accumulates the timeouts reported for one round, deduplicated
@@ -59,8 +60,13 @@ func (p *Pacemaker) CurrentRound() uint64 { return p.currentRound }
 // nil when a QC justified it.
 func (p *Pacemaker) LastRoundTC() *diempb.TimeoutCert { return p.lastRoundTC }
 
+// Epoch names the armed timer. Every Stop moves it on, so it is never the
+// epoch of a timer that was disarmed.
+func (p *Pacemaker) Epoch() uint64 { return p.epoch }
+
 // Stop disarms the round timer.
 func (p *Pacemaker) Stop() {
+	p.epoch++
 	if p.timer != nil {
 		p.timer.Stop()
 		p.timer = nil
@@ -79,8 +85,9 @@ func (p *Pacemaker) startTimer(newRound uint64) {
 		}
 	}
 	// The callback runs off the consensus goroutine, so it may only enqueue.
+	epoch := p.epoch
 	p.timer = p.clock.AfterFunc(p.dur.Duration(), func() {
-		p.sink(LocalTimeoutEvent{Round: newRound})
+		p.sink(LocalTimeoutEvent{Epoch: epoch})
 	})
 }
 
@@ -89,7 +96,11 @@ func (p *Pacemaker) startTimer(newRound uint64) {
 // The paper's save_consensus_state() has no counterpart here: the two counters
 // it would persist live in Safety, and this prototype keeps no durable state.
 func (p *Pacemaker) LocalTimeoutRound() {
-	p.dur.Grow()
+	// Re-arm first, whatever Safety decides. The paper (3.5,
+	// local_timeout_round) stops the timer and relies on a TC arriving; a
+	// replica whose broadcast is lost or refused would then sit with no timer
+	// at all, so the timeout is retried until a QC or a TC moves the round.
+	p.startTimer(p.currentRound)
 	info := p.safety.MakeTimeout(p.currentRound, p.tree.HighQC(), p.lastRoundTC)
 	if info == nil {
 		return
@@ -105,10 +116,6 @@ func (p *Pacemaker) LocalTimeoutRound() {
 		LastRoundTc:  justifyingTC(QCRound(info.GetHighQc()), info.GetRound(), p.lastRoundTC),
 		HighCommitQc: p.tree.HighCommitQC(),
 	}.Build())
-	// Re-arm. The paper stops the timer here and relies on a TC arriving; a
-	// replica whose broadcast is lost would then sit with no timer at all, so
-	// the timeout is retransmitted until a QC or a TC moves the round.
-	p.startTimer(p.currentRound)
 }
 
 // ProcessRemoteTimeout accumulates tmo and returns the certificate it
@@ -139,33 +146,39 @@ func (p *Pacemaker) ProcessRemoteTimeout(tmo *diempb.TimeoutMsg) *diempb.Timeout
 	b.senders[info.GetSender()] = struct{}{}
 	b.infos = append(b.infos, info)
 
-	switch len(b.senders) {
-	case p.faulty + 1:
+	// Two separate tests, as in DiemBFT 3.5 process_remote_timeout: with n=1
+	// both thresholds are 1, and the one timeout must amplify and complete the
+	// TC.
+	if len(b.senders) == p.faulty+1 {
 		p.Stop()
 		p.LocalTimeoutRound()
-	case p.quorum:
-		votes := make([]*diempb.TimeoutVote, 0, len(b.infos))
-		for _, i := range b.infos {
-			votes = append(votes, diempb.TimeoutVote_builder{HighQcRound: QCRound(i.GetHighQc()), Sig: i.GetSig()}.Build())
-		}
-		// Signer order is canonical for the same reason BlockTree.canonical
-		// sorts a QC's signatures: one certificate has one wire form, and a
-		// receiver rejects anything else. Timeouts arrive in whatever order the
-		// network delivers them, so this is not already sorted.
-		slices.SortFunc(votes, func(a, b *diempb.TimeoutVote) int {
-			return cmp.Compare(a.GetSig().GetSigner(), b.GetSig().GetSigner())
-		})
-		return diempb.TimeoutCert_builder{Round: info.GetRound(), Votes: votes}.Build()
 	}
-	return nil
+	if len(b.senders) != p.quorum {
+		return nil
+	}
+	votes := make([]*diempb.TimeoutVote, 0, len(b.infos))
+	for _, i := range b.infos {
+		votes = append(votes, diempb.TimeoutVote_builder{HighQcRound: QCRound(i.GetHighQc()), Sig: i.GetSig()}.Build())
+	}
+	// Signer order is canonical for the same reason BlockTree.canonical
+	// sorts a QC's signatures: one certificate has one wire form, and a
+	// receiver rejects anything else. Timeouts arrive in whatever order the
+	// network delivers them, so this is not already sorted.
+	slices.SortFunc(votes, func(a, b *diempb.TimeoutVote) int {
+		return cmp.Compare(a.GetSig().GetSigner(), b.GetSig().GetSigner())
+	})
+	return diempb.TimeoutCert_builder{Round: info.GetRound(), Votes: votes}.Build()
 }
 
 // AdvanceRoundTC enters the round after tc's. It reports whether the round
-// moved, which is what tells Core a new-round event is due.
+// moved, which is what tells Core a new-round event is due. The timer grows
+// here, once per round that ended on a TC, rather than on each local timeout,
+// which is retransmitted while the round is stuck.
 func (p *Pacemaker) AdvanceRoundTC(tc *diempb.TimeoutCert) bool {
 	if tc == nil || tc.GetRound() < p.currentRound {
 		return false
 	}
+	p.dur.Grow()
 	p.lastRoundTC = tc
 	p.startTimer(tc.GetRound() + 1)
 	return true
@@ -185,7 +198,8 @@ func (p *Pacemaker) AdvanceRoundQC(qc *diempb.QuorumCert) bool {
 }
 
 // Backoff is the round timer's duration: it grows by a factor on every
-// consecutive timeout, capped at max, and resets when a round succeeds.
+// consecutive round that ends on a TC, capped at max, and resets when a round
+// succeeds.
 // DiemBFT 3.5 get_round_timer gives 4Δ or α+β·commit_gap instead; growth stands
 // in for a configured Δ, so liveness (Lemma 8) needs max above a round's time
 // after GST.
