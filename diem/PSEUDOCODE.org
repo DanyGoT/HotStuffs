@@ -36,11 +36,13 @@ construction and needs no default case.
 - Implemented :: =core.go:Step=; the event set is =events.go:Event= with its
   four members.
 - Differs :: the paper dispatches a local timeout unconditionally. =Step=
-  runs =Pacemaker.LocalTimeoutRound= only when the event's =Round= is still
-  =Pacemaker.CurrentRound()=. The timer callback runs off the consensus
-  goroutine and only enqueues, so a callback that had already fired when
-  =startTimer= or =Stop= disarmed the timer is still sitting in the queue;
-  running it would abandon a round the replica entered on a good certificate.
+  runs =Pacemaker.LocalTimeoutRound= only when the event's =Epoch= is still
+  =Pacemaker.Epoch()=, which every =Stop= moves on. The timer callback runs off
+  the consensus goroutine and only enqueues, so a callback that had already
+  fired when =startTimer= or =Stop= disarmed the timer is still sitting in the
+  queue. Running it would abandon a round the replica entered on a good
+  certificate, or time out a round re-armed by Bracha amplification a second
+  time; a round number cannot tell the second case apart.
 
 ** process_certificate_qc(qc)
 

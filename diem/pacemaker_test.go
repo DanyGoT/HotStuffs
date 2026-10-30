@@ -148,7 +148,7 @@ func TestAdvanceRoundTCEntersNextRoundAndRecordsTC(t *testing.T) {
 	}
 }
 
-func TestStartTimerPushesLocalTimeoutEventForItsOwnRound(t *testing.T) {
+func TestStartTimerPushesLocalTimeoutEventForItsOwnEpoch(t *testing.T) {
 	pm, clock, _, events := newTestPacemaker(t, 4)
 	pm.startTimer(7)
 
@@ -161,8 +161,8 @@ func TestStartTimerPushesLocalTimeoutEventForItsOwnRound(t *testing.T) {
 	if !ok {
 		t.Fatalf("event type = %T, want LocalTimeoutEvent", (*events)[0])
 	}
-	if ev.Round != 7 {
-		t.Fatalf("LocalTimeoutEvent.Round = %d, want 7", ev.Round)
+	if ev.Epoch != pm.Epoch() {
+		t.Fatalf("LocalTimeoutEvent.Epoch = %d, want the armed timer's %d", ev.Epoch, pm.Epoch())
 	}
 }
 

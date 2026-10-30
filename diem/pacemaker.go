@@ -27,6 +27,7 @@ type Pacemaker struct {
 	lastRoundTC     *diempb.TimeoutCert
 	pendingTimeouts map[uint64]*timeoutBucket
 	timer           Timer
+	epoch           uint64
 }
 
 // timeoutBucket accumulates the timeouts reported for one round, deduplicated
@@ -59,8 +60,13 @@ func (p *Pacemaker) CurrentRound() uint64 { return p.currentRound }
 // nil when a QC justified it.
 func (p *Pacemaker) LastRoundTC() *diempb.TimeoutCert { return p.lastRoundTC }
 
+// Epoch names the armed timer. Every Stop moves it on, so it is never the
+// epoch of a timer that was disarmed.
+func (p *Pacemaker) Epoch() uint64 { return p.epoch }
+
 // Stop disarms the round timer.
 func (p *Pacemaker) Stop() {
+	p.epoch++
 	if p.timer != nil {
 		p.timer.Stop()
 		p.timer = nil
@@ -79,8 +85,9 @@ func (p *Pacemaker) startTimer(newRound uint64) {
 		}
 	}
 	// The callback runs off the consensus goroutine, so it may only enqueue.
+	epoch := p.epoch
 	p.timer = p.clock.AfterFunc(p.dur.Duration(), func() {
-		p.sink(LocalTimeoutEvent{Round: newRound})
+		p.sink(LocalTimeoutEvent{Epoch: epoch})
 	})
 }
 

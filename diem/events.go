@@ -19,8 +19,9 @@ type VoteEvent struct{ Msg *diempb.VoteMsg }
 // TimeoutEvent is an authenticated timeout from another replica.
 type TimeoutEvent struct{ Msg *diempb.TimeoutMsg }
 
-// LocalTimeoutEvent is this replica's own round timer firing.
-type LocalTimeoutEvent struct{ Round uint64 }
+// LocalTimeoutEvent is this replica's own round timer firing. Epoch names the
+// timer, so an event from one that has since been disarmed can be told apart.
+type LocalTimeoutEvent struct{ Epoch uint64 }
 
 // BlockEvent is a block fetched from a peer. The edge has checked that its
 // recomputed id is the one this replica asked for, and that id came from a
