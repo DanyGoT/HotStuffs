@@ -139,25 +139,28 @@ func (p *Pacemaker) ProcessRemoteTimeout(tmo *diempb.TimeoutMsg) *diempb.Timeout
 	b.senders[info.GetSender()] = struct{}{}
 	b.infos = append(b.infos, info)
 
-	switch len(b.senders) {
-	case p.faulty + 1:
+	// Two separate tests, as in DiemBFT 3.5 process_remote_timeout: with n=1
+	// both thresholds are 1, and the one timeout must amplify and complete the
+	// TC.
+	if len(b.senders) == p.faulty+1 {
 		p.Stop()
 		p.LocalTimeoutRound()
-	case p.quorum:
-		votes := make([]*diempb.TimeoutVote, 0, len(b.infos))
-		for _, i := range b.infos {
-			votes = append(votes, diempb.TimeoutVote_builder{HighQcRound: QCRound(i.GetHighQc()), Sig: i.GetSig()}.Build())
-		}
-		// Signer order is canonical for the same reason BlockTree.canonical
-		// sorts a QC's signatures: one certificate has one wire form, and a
-		// receiver rejects anything else. Timeouts arrive in whatever order the
-		// network delivers them, so this is not already sorted.
-		slices.SortFunc(votes, func(a, b *diempb.TimeoutVote) int {
-			return cmp.Compare(a.GetSig().GetSigner(), b.GetSig().GetSigner())
-		})
-		return diempb.TimeoutCert_builder{Round: info.GetRound(), Votes: votes}.Build()
 	}
-	return nil
+	if len(b.senders) != p.quorum {
+		return nil
+	}
+	votes := make([]*diempb.TimeoutVote, 0, len(b.infos))
+	for _, i := range b.infos {
+		votes = append(votes, diempb.TimeoutVote_builder{HighQcRound: QCRound(i.GetHighQc()), Sig: i.GetSig()}.Build())
+	}
+	// Signer order is canonical for the same reason BlockTree.canonical
+	// sorts a QC's signatures: one certificate has one wire form, and a
+	// receiver rejects anything else. Timeouts arrive in whatever order the
+	// network delivers them, so this is not already sorted.
+	slices.SortFunc(votes, func(a, b *diempb.TimeoutVote) int {
+		return cmp.Compare(a.GetSig().GetSigner(), b.GetSig().GetSigner())
+	})
+	return diempb.TimeoutCert_builder{Round: info.GetRound(), Votes: votes}.Build()
 }
 
 // AdvanceRoundTC enters the round after tc's. It reports whether the round

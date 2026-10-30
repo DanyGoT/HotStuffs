@@ -388,7 +388,8 @@ Accumulate a timeout for a round not already behind us; at f+1 senders time out
 locally as well (Bracha amplification), at 2f+1 return the TC.
 
 - Implemented :: =pacemaker.go:ProcessRemoteTimeout=; the
-  thresholds are the =faulty+1= and =quorum= cases of its switch.
+  thresholds are its two separate tests, =faulty+1= then =quorum=. With n=1 both
+  are 1, and the one timeout passes both.
 - Differs :: two things.
   1. It returns early on a duplicate sender. The paper puts its
      two count tests *outside* the duplicate guard, and re-adding a sender to a
