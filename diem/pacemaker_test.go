@@ -267,6 +267,19 @@ func TestProcessRemoteTimeoutQuorumFormsValidTC(t *testing.T) {
 	}
 }
 
+// TestProcessRemoteTimeoutSingleReplicaFormsTC covers n=1, where f+1 and the
+// quorum are both 1: the one timeout must both amplify and complete the TC.
+func TestProcessRemoteTimeoutSingleReplicaFormsTC(t *testing.T) {
+	pm, _, _, _ := newTestPacemaker(t, 1)
+	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
+		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
+	}
+
+	if tc := pm.ProcessRemoteTimeout(timeoutMsg(timeoutInfoFrom(t, 1, 1, 1, 0))); tc == nil {
+		t.Fatal("no TC formed with n=1, where one timeout is a quorum")
+	}
+}
+
 // TestLocalTimeoutRoundDropsRedundantTC pins a gap between two parts of the
 // paper. local_timeout_round (3.5) broadcasts last_round_tc unconditionally,
 // but the well-formedness rule says a round-r message carries the TC of r-1
