@@ -348,7 +348,8 @@ The paper leaves the formula open — "4*delta, or alpha + beta*commit_gap(r) if
 delta is unknown".
 
 - Implemented :: delegated to an exponential backoff, =pacemaker.go:Backoff=,
-  read in =startTimer= and fed by =Grow= and =Reset=.
+  read in =startTimer=, grown by =AdvanceRoundTC= once per round that ended on
+  a TC, and reset by =AdvanceRoundQC=.
 - Differs :: a choice within the paper's latitude rather than a deviation.
   There is no =Pacemaker= method of this name; the policy is a field.
 
@@ -408,7 +409,8 @@ locally as well (Bracha amplification), at 2f+1 return the TC.
 ** advance_round_tc(tc)
 
 - Implemented :: =pacemaker.go:AdvanceRoundTC=.
-- Faithful :: no deviation.
+- Faithful :: no deviation. The =Grow= call in =AdvanceRoundTC= is
+  =get_round_timer='s business, not the round logic's.
 
 ** advance_round_qc(qc)
 
