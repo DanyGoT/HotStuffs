@@ -35,9 +35,10 @@ func TestLoopTickProcessesOneEvent(t *testing.T) {
 		t.Fatal("Tick() = true on an empty queue")
 	}
 	// Two events Core drops as stale, then the one it acts on.
-	l.Push(LocalTimeoutEvent{Round: 0})
-	l.Push(LocalTimeoutEvent{Round: 0})
-	l.Push(LocalTimeoutEvent{Round: 1})
+	epoch := l.core.pacemaker.Epoch()
+	l.Push(LocalTimeoutEvent{Epoch: epoch - 1})
+	l.Push(LocalTimeoutEvent{Epoch: epoch - 1})
+	l.Push(LocalTimeoutEvent{Epoch: epoch})
 
 	for i := range 2 {
 		if !l.Tick() {
@@ -67,7 +68,7 @@ func TestLoopRunProcessesThenStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	l, net := newLoopFixture(t, func(Event, State, time.Duration) { cancel() })
 	l.core.Start()
-	l.Push(LocalTimeoutEvent{Round: 1})
+	l.Push(LocalTimeoutEvent{Epoch: l.core.pacemaker.Epoch()})
 
 	if err := l.Run(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run() = %v, want context.Canceled", err)
