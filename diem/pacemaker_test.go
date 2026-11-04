@@ -1,6 +1,7 @@
 package diem
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -26,28 +27,21 @@ func (n *recordNet) RequestBlock([]byte)          {}
 
 var _ Transport = (*recordNet)(nil)
 
-// recordSink returns a sink appending the timer callbacks pushed to it, in
-// order, to *log.
-func recordSink(log *[]func(*Core)) func(any) {
-	return func(m any) { *log = append(*log, m.(func(*Core))) }
-}
-
 // newTestPacemaker returns a pacemaker for a replica set of size n, replica id
-// 1, wired to test doubles for the clock, sink and transport.
-func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fakeClock, *recordNet, *[]func(*Core)) {
+// 1, wired to test doubles for the clock and transport.
+func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fakeClock, *recordNet) {
 	t.Helper()
 	quorum := QuorumSize(n)
 	faulty := Faulty(n)
 	clock := newFakeClock()
 	net := &recordNet{}
-	fired := new([]func(*Core))
 	ledger := NewMemLedger()
 	crypto := newTestSigner(n)
 	tree := NewBlockTree(1, quorum, ledger, crypto)
 	safety := NewSafety(1, NewVerifier(crypto, quorum), crypto, ledger, tree)
 	dur := NewBackoff(10*time.Millisecond, time.Second, 2)
-	pm := NewPacemaker(quorum, faulty, clock, dur, recordSink(fired), net, safety, tree)
-	return pm, clock, net, fired
+	pm := NewPacemaker(quorum, faulty, clock, dur, new(sync.Mutex), net, safety, tree)
+	return pm, clock, net
 }
 
 // timeoutInfoFrom builds a well-signed TimeoutInfo for sender, as if it were
@@ -71,7 +65,7 @@ func timeoutMsg(info *diempb.TimeoutInfo) *diempb.TimeoutMsg {
 }
 
 func TestAdvanceRoundQCBelowCurrentRoundChangesNothing(t *testing.T) {
-	pm, _, _, _ := newTestPacemaker(t, 4)
+	pm, _, _ := newTestPacemaker(t, 4)
 	if !pm.AdvanceRoundQC(bareQC(nil, 4)) {
 		t.Fatal("setup: AdvanceRoundQC(round 4) should have entered round 5")
 	}
@@ -90,7 +84,7 @@ func TestAdvanceRoundQCBelowCurrentRoundChangesNothing(t *testing.T) {
 }
 
 func TestAdvanceRoundQCAtOrAboveEntersNextRoundAndClearsTC(t *testing.T) {
-	pm, _, _, _ := newTestPacemaker(t, 4)
+	pm, _, _ := newTestPacemaker(t, 4)
 	if !pm.AdvanceRoundTC(makeTC(2)) {
 		t.Fatal("setup: AdvanceRoundTC(round 2) should have entered round 3")
 	}
@@ -112,7 +106,7 @@ func TestAdvanceRoundQCAtOrAboveEntersNextRoundAndClearsTC(t *testing.T) {
 }
 
 func TestAdvanceRoundTCNilReturnsFalse(t *testing.T) {
-	pm, _, _, _ := newTestPacemaker(t, 4)
+	pm, _, _ := newTestPacemaker(t, 4)
 	if pm.AdvanceRoundTC(nil) {
 		t.Fatal("AdvanceRoundTC(nil) returned true")
 	}
@@ -122,7 +116,7 @@ func TestAdvanceRoundTCNilReturnsFalse(t *testing.T) {
 }
 
 func TestAdvanceRoundTCBelowCurrentRoundReturnsFalse(t *testing.T) {
-	pm, _, _, _ := newTestPacemaker(t, 4)
+	pm, _, _ := newTestPacemaker(t, 4)
 	if !pm.AdvanceRoundQC(bareQC(nil, 4)) {
 		t.Fatal("setup: AdvanceRoundQC(round 4) should have entered round 5")
 	}
@@ -135,7 +129,7 @@ func TestAdvanceRoundTCBelowCurrentRoundReturnsFalse(t *testing.T) {
 }
 
 func TestAdvanceRoundTCEntersNextRoundAndRecordsTC(t *testing.T) {
-	pm, _, _, _ := newTestPacemaker(t, 4)
+	pm, _, _ := newTestPacemaker(t, 4)
 	tc := makeTC(2)
 	if !pm.AdvanceRoundTC(tc) {
 		t.Fatal("AdvanceRoundTC(round 2) returned false")
@@ -149,22 +143,18 @@ func TestAdvanceRoundTCEntersNextRoundAndRecordsTC(t *testing.T) {
 }
 
 func TestStartTimerFiresLocalTimeoutRound(t *testing.T) {
-	pm, clock, net, fired := newTestPacemaker(t, 4)
+	pm, clock, net := newTestPacemaker(t, 4)
 	pm.AdvanceRoundQC(genesisQC)
 
 	clock.Advance(pm.dur.Duration())
 
-	if len(*fired) != 1 {
-		t.Fatalf("sink got %d timer callbacks, want 1", len(*fired))
-	}
-	(*fired)[0](nil)
 	if len(net.timeouts) != 1 {
 		t.Fatalf("the armed timer broadcast %d timeouts, want 1", len(net.timeouts))
 	}
 }
 
 func TestProcessRemoteTimeoutPastRoundReturnsNil(t *testing.T) {
-	pm, _, net, _ := newTestPacemaker(t, 4)
+	pm, _, net := newTestPacemaker(t, 4)
 	if !pm.AdvanceRoundQC(bareQC(nil, 5)) {
 		t.Fatal("setup: AdvanceRoundQC(round 5) should have entered round 6")
 	}
@@ -179,7 +169,7 @@ func TestProcessRemoteTimeoutPastRoundReturnsNil(t *testing.T) {
 }
 
 func TestProcessRemoteTimeoutDuplicateSenderCountsOnce(t *testing.T) {
-	pm, _, net, _ := newTestPacemaker(t, 4) // n=4: f=1, quorum=3, so f+1=2 distinct senders self-times-out
+	pm, _, net := newTestPacemaker(t, 4) // n=4: f=1, quorum=3, so f+1=2 distinct senders self-times-out
 	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
 		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
 	}
@@ -194,7 +184,7 @@ func TestProcessRemoteTimeoutDuplicateSenderCountsOnce(t *testing.T) {
 }
 
 func TestProcessRemoteTimeoutBrachaAmplificationAtFPlus1(t *testing.T) {
-	pm, _, net, _ := newTestPacemaker(t, 4) // f=1, so f+1=2 distinct senders
+	pm, _, net := newTestPacemaker(t, 4) // f=1, so f+1=2 distinct senders
 	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
 		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
 	}
@@ -218,7 +208,7 @@ func TestProcessRemoteTimeoutBrachaAmplificationAtFPlus1(t *testing.T) {
 }
 
 func TestProcessRemoteTimeoutQuorumFormsValidTC(t *testing.T) {
-	pm, _, _, _ := newTestPacemaker(t, 4) // quorum=3
+	pm, _, _ := newTestPacemaker(t, 4) // quorum=3
 	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
 		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
 	}
@@ -267,7 +257,7 @@ func TestProcessRemoteTimeoutQuorumFormsValidTC(t *testing.T) {
 // TestProcessRemoteTimeoutSingleReplicaFormsTC covers n=1, where f+1 and the
 // quorum are both 1: the one timeout must both amplify and complete the TC.
 func TestProcessRemoteTimeoutSingleReplicaFormsTC(t *testing.T) {
-	pm, _, _, _ := newTestPacemaker(t, 1)
+	pm, _, _ := newTestPacemaker(t, 1)
 	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
 		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
 	}
@@ -289,7 +279,7 @@ func TestProcessRemoteTimeoutSingleReplicaFormsTC(t *testing.T) {
 // false without clearing last_round_tc, which is the paper's own text, while
 // BlockTree.process_qc has already raised high_qc.
 func TestLocalTimeoutRoundDropsRedundantTC(t *testing.T) {
-	pm, _, net, _ := newTestPacemaker(t, testN)
+	pm, _, net := newTestPacemaker(t, testN)
 
 	if !pm.AdvanceRoundTC(makeTC(2, 1, 1, 1)) {
 		t.Fatal("AdvanceRoundTC(TC for round 2) = false, want the replica to enter round 3")
@@ -314,7 +304,7 @@ func TestLocalTimeoutRoundDropsRedundantTC(t *testing.T) {
 // TestBackoffGrowsOncePerFailedRound: retransmitting a round's timeout must not
 // grow the timer; the round ending on a TC grows it once.
 func TestBackoffGrowsOncePerFailedRound(t *testing.T) {
-	pm, _, _, _ := newTestPacemaker(t, 4) // backoff factor 2
+	pm, _, _ := newTestPacemaker(t, 4) // backoff factor 2
 	base := pm.dur.Duration()
 	if !pm.AdvanceRoundQC(bareQC(nil, 0)) {
 		t.Fatal("setup: AdvanceRoundQC(round 0) should have entered round 1")
@@ -337,23 +327,17 @@ func TestBackoffGrowsOncePerFailedRound(t *testing.T) {
 // entered on a QC the tree never saw, so high_qc stays at genesis and
 // MakeTimeout declines.
 func TestLocalTimeoutRoundRearmsWhenRefused(t *testing.T) {
-	pm, clock, net, fired := newTestPacemaker(t, 4)
+	pm, clock, net := newTestPacemaker(t, 4)
 	if !pm.AdvanceRoundQC(bareQC(nil, 4)) {
 		t.Fatal("setup: AdvanceRoundQC(round 4) should have entered round 5")
 	}
-	clock.Advance(pm.dur.Duration())
-	if len(*fired) != 1 {
-		t.Fatalf("setup: the round timer pushed %d callbacks, want 1", len(*fired))
-	}
 
-	pm.LocalTimeoutRound()
+	clock.Advance(pm.dur.Duration())
 	if len(net.timeouts) != 0 {
 		t.Fatalf("setup: broadcast %d timeouts, want MakeTimeout to refuse", len(net.timeouts))
 	}
-
-	clock.Advance(pm.dur.Duration())
-	if len(*fired) != 2 {
-		t.Fatalf("no timer re-armed after a refused timeout: %d callbacks, want 2", len(*fired))
+	if len(clock.pending) != 1 {
+		t.Fatalf("%d timers armed after a refused timeout, want 1", len(clock.pending))
 	}
 }
 

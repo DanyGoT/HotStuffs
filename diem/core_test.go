@@ -1,6 +1,7 @@
 package diem
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -18,12 +19,11 @@ type coreFixture struct {
 	core   *Core
 	ledger *MemLedger
 	net    *recordNet
-	fired  *[]func(*Core)
 }
 
 func newCoreFixture(t *testing.T) *coreFixture {
 	t.Helper()
-	f := &coreFixture{ledger: NewMemLedger(), net: &recordNet{}, fired: new([]func(*Core))}
+	f := &coreFixture{ledger: NewMemLedger(), net: &recordNet{}}
 	ids := []uint32{1, 2, 3, 4}
 	f.core = New(Config{
 		ID:           2,
@@ -34,7 +34,7 @@ func newCoreFixture(t *testing.T) *coreFixture {
 		Transport:    f.net,
 		Clock:        newFakeClock(),
 		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
-		Sink:         recordSink(f.fired),
+		Lock:         new(sync.Mutex),
 	})
 	f.core.Start()
 	if got := f.core.State().Round; got != 1 {
@@ -71,7 +71,7 @@ func TestCoreVotesForValidProposal(t *testing.T) {
 	}
 }
 
-// TestCoreRejectsProposals covers the loop's half of the split: the checks that
+// TestCoreRejectsProposals covers the core's half of the split: the checks that
 // read protocol state. Everything a message can be judged on by itself is the
 // Verifier's, and diem/verify_test.go holds those cases.
 func TestCoreRejectsProposals(t *testing.T) {
@@ -189,16 +189,15 @@ func TestCoreAmplifiesTimeouts(t *testing.T) {
 }
 
 // TestCoreIgnoresStaleTimer covers the guard on the local timer: a callback
-// enqueued by a timer that has since been disarmed must not make the replica
+// that fired while another call moved the round on must not make the replica
 // give up on the round it is in now.
 func TestCoreIgnoresStaleTimer(t *testing.T) {
 	f := newCoreFixture(t)
 	clock := f.core.pacemaker.clock.(*fakeClock)
-	clock.Advance(100 * time.Millisecond)
-	if len(*f.fired) != 1 {
-		t.Fatalf("setup: the round-1 timer pushed %d callbacks, want 1", len(*f.fired))
+	stale := clock.take(time.Second)
+	if stale == nil {
+		t.Fatal("setup: no round-1 timer armed")
 	}
-	stale := (*f.fired)[0]
 
 	for _, from := range []uint32{1, 3, 4} { // a quorum: round 2 on a TC
 		f.core.OnTimeout(timeoutFrom(t, from))
@@ -207,12 +206,11 @@ func TestCoreIgnoresStaleTimer(t *testing.T) {
 		t.Fatalf("setup: in round %d, want 2", got)
 	}
 	sent := len(f.net.timeouts)
-	stale(f.core)
+	stale()
 	if len(f.net.timeouts) != sent {
 		t.Fatal("timed out on a stale timer callback")
 	}
-	clock.Advance(time.Second)
-	(*f.fired)[len(*f.fired)-1](f.core)
+	clock.take(time.Second)()
 	if len(f.net.timeouts) != sent+1 {
 		t.Fatalf("broadcast %d timeouts for the armed timer, want 1", len(f.net.timeouts)-sent)
 	}
@@ -220,14 +218,13 @@ func TestCoreIgnoresStaleTimer(t *testing.T) {
 
 // TestCoreIgnoresTimerRearmedInSameRound is the stale callback the round cannot
 // tell apart: the timer fires, then f+1 remote timeouts re-arm the same round
-// before the queued callback runs.
+// before its callback gets the lock.
 func TestCoreIgnoresTimerRearmedInSameRound(t *testing.T) {
 	f := newCoreFixture(t)
-	f.core.pacemaker.clock.(*fakeClock).Advance(100 * time.Millisecond)
-	if len(*f.fired) != 1 {
-		t.Fatalf("setup: the round-1 timer pushed %d callbacks, want 1", len(*f.fired))
+	stale := f.core.pacemaker.clock.(*fakeClock).take(time.Second)
+	if stale == nil {
+		t.Fatal("setup: no round-1 timer armed")
 	}
-	stale := (*f.fired)[0]
 
 	for _, from := range []uint32{1, 3} { // f+1 = 2 distinct senders
 		f.core.OnTimeout(timeoutFrom(t, from))
@@ -236,7 +233,7 @@ func TestCoreIgnoresTimerRearmedInSameRound(t *testing.T) {
 		t.Fatalf("setup: broadcast %d timeouts after f+1 remote ones, want 1", len(f.net.timeouts))
 	}
 
-	stale(f.core)
+	stale()
 	if len(f.net.timeouts) != 1 {
 		t.Fatalf("broadcast %d timeouts after a disarmed timer's callback, want 1", len(f.net.timeouts))
 	}
@@ -244,23 +241,23 @@ func TestCoreIgnoresTimerRearmedInSameRound(t *testing.T) {
 
 func TestCoreStopDisarmsTimer(t *testing.T) {
 	clock := newFakeClock()
-	var fired []func(*Core)
+	net := &recordNet{}
 	core := New(Config{
 		ID:           1,
 		Validators:   []uint32{1, 2, 3, 4},
 		Ledger:       NewMemLedger(),
 		Transactions: NewFIFOPool(16, 2).GetTransactions,
 		Crypto:       newTestSigner(testN),
-		Transport:    &recordNet{},
+		Transport:    net,
 		Clock:        clock,
 		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
-		Sink:         recordSink(&fired),
+		Lock:         new(sync.Mutex),
 	})
 	core.Start()
 	core.Stop()
 	clock.Advance(time.Second)
-	if len(fired) != 0 {
-		t.Fatalf("a stopped core pushed %d timer callbacks", len(fired))
+	if len(net.timeouts) != 0 {
+		t.Fatalf("a stopped core broadcast %d timeouts", len(net.timeouts))
 	}
 }
 

@@ -158,8 +158,8 @@ func TestClusterCommitsIdenticalPrefix(t *testing.T) {
 		// Not an assertion: a replica that misses a proposal declines to vote
 		// on its descendants until it has fetched it, and the rate is what the
 		// report quotes about that gap.
-		t.Logf("replica %d: committed %d, declined for a missing ancestor %d, queue high-water %d",
-			r.ID(), len(r.Log()), r.DeclinedMissingAncestor(), r.QueueHighWater())
+		t.Logf("replica %d: committed %d, declined for a missing ancestor %d",
+			r.ID(), len(r.Log()), r.DeclinedMissingAncestor())
 	}
 
 	cancel()

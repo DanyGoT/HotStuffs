@@ -7,7 +7,7 @@ import (
 )
 
 // Transport is the outbound half of the network. Every method is safe to call
-// from the consensus goroutine, never blocks, and returns no error: a BFT
+// inside a core call, never blocks, and returns no error: a BFT
 // replica cannot act on a send failure, and the round timer is the recovery
 // mechanism.
 type Transport interface {
@@ -41,7 +41,7 @@ type Clock interface {
 type Timer interface{ Stop() bool }
 
 // SystemClock is the wall-clock Clock. time.AfterFunc runs its callback on its
-// own goroutine, which is why a timer callback may only enqueue.
+// own goroutine, which is why the pacemaker takes Config.Lock in it.
 type SystemClock struct{}
 
 func (SystemClock) Now() time.Time { return time.Now() }
