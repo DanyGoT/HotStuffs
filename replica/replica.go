@@ -57,11 +57,9 @@ type Replica struct {
 
 	// mu serializes every call into the core: inbound messages, fetched
 	// blocks and the round timer. Gorums runs one sender's handlers in order,
-	// and mu serializes them across senders. It also guards stopped, commits,
-	// commands and proposed. The core writes the last three through the
-	// ledger and the transport.
+	// and mu serializes them across senders. It also guards commits, commands
+	// and proposed, which the core writes through the ledger and the transport.
 	mu       sync.Mutex
-	stopped  bool
 	commits  []*diempb.Block
 	commands uint64
 
@@ -102,7 +100,6 @@ func New(cfg Config) *Replica {
 		ID:          cfg.ID,
 		Peers:       cfg.Peers,
 		Listen:      cfg.Listen,
-		Sink:        r.deliver,
 		Verifier:    diem.NewVerifier(signer, diem.QuorumSize(len(validators))),
 		Server:      cfg.Server,
 		DialOptions: cfg.DialOptions,
@@ -119,16 +116,6 @@ func New(cfg Config) *Replica {
 		Transactions: cfg.Transactions,
 	})
 	return r
-}
-
-// deliver hands a verified input to the core, once it has started and until
-// it has stopped.
-func (r *Replica) deliver(m any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.stopped {
-		r.core.Dispatch(m)
-	}
 }
 
 // stamper records when this replica sends each of its proposals.
@@ -168,9 +155,8 @@ func (r *Replica) commit(b *diempb.Block) {
 // stops; the transport is shut down after the core, never before.
 func (r *Replica) Run(ctx context.Context) error {
 	r.mu.Lock()
-	r.net.Start()
+	r.net.Start(r.core, &r.mu)
 	if err := r.net.WaitForPeers(ctx); err != nil {
-		r.stopped = true
 		r.mu.Unlock()
 		r.net.Stop()
 		return err
@@ -187,9 +173,8 @@ func (r *Replica) Run(ctx context.Context) error {
 	<-ctx.Done()
 
 	// Gorums does not wait for its handler goroutines on Stop, so a late
-	// message can still reach deliver; stopped turns it away.
+	// message can still reach the core, and a stopped core ignores it.
 	r.mu.Lock()
-	r.stopped = true
 	r.core.Stop()
 	r.result = r.m.Finish()
 	r.mu.Unlock()

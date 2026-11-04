@@ -57,6 +57,25 @@ func proposal(from uint32, author uint32, round uint64) *diempb.ProposalMsg {
 	}.Build()
 }
 
+// TestStoppedCoreIgnoresInput: the network can deliver after the replica has
+// stopped its core. Acting on that would send a vote, or re-arm the timer the
+// stop disarmed.
+func TestStoppedCoreIgnoresInput(t *testing.T) {
+	f := newCoreFixture(t)
+	f.core.Stop()
+
+	f.core.OnProposal(proposal(1, 1, 1))
+	for _, from := range []uint32{1, 3, 4} { // a quorum
+		f.core.OnTimeout(timeoutFrom(t, from))
+	}
+	if len(f.net.votes) != 0 || len(f.net.timeouts) != 0 {
+		t.Fatalf("a stopped core sent %d votes and %d timeouts, want none", len(f.net.votes), len(f.net.timeouts))
+	}
+	if n := len(f.core.pacemaker.clock.(*fakeClock).pending); n != 0 {
+		t.Fatalf("a stopped core armed %d timers, want none", n)
+	}
+}
+
 func TestCoreVotesForValidProposal(t *testing.T) {
 	f := newCoreFixture(t)
 	f.core.OnProposal(proposal(1, 1, 1))

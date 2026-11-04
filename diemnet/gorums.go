@@ -27,7 +27,6 @@ type Config struct {
 	ID       uint32
 	Peers    map[uint32]string // every replica's address, this one included
 	Listen   string            // ":0" picks a free port; read it back with Addr
-	Sink     func(any)         // where verified inputs go
 	Verifier *diem.Verifier
 
 	OutQueue      int // outbound queue depth; 0 picks a default
@@ -104,26 +103,30 @@ func New(cfg Config) *Transport {
 			gorums.WithPeers(uint32(cfg.ID), gorums.WithNodes(peers), cfg.DialOptions...),
 		}, cfg.ServerOptions...)...)
 	}
-	h := &handler{ver: cfg.Verifier, sink: cfg.Sink}
-	// Register before anything serves. GORUMS: Server.RegisterHandler writes an
-	// unsynchronised map that the inbound manager reads once serving starts, so
-	// gorumstest.LocalServers — which serves before it returns — cannot be used
-	// for a replica group; -race flags it.
-	diempb.RegisterDiemServer(srv, h)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Transport{
 		srv:     srv,
-		handler: h,
+		handler: &handler{ver: cfg.Verifier},
 		out:     make(chan call, cfg.OutQueue),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
 }
 
-// Start serves inbound requests and begins draining the outbound queue. It
-// returns immediately.
-func (t *Transport) Start() {
+// Start hands verified inbound messages to core under mu, the lock the caller
+// serializes every core call with, then serves and begins draining the
+// outbound queue. It returns immediately.
+func (t *Transport) Start(core *diem.Core, mu sync.Locker) {
+	t.handler.core, t.handler.mu = core, mu
+	t.serve(t.handler)
+}
+
+// serve registers h and serves. GORUMS: Server.RegisterHandler writes an
+// unsynchronised map that the inbound manager reads once serving starts, so
+// registration comes first, and gorumstest.LocalServers — which serves before
+// it returns — cannot be used for a replica group; -race flags it.
+func (t *Transport) serve(h diempb.DiemServer) {
+	diempb.RegisterDiemServer(t.srv, h)
 	t.wg.Add(2)
 	go func() {
 		defer t.wg.Done()
@@ -176,11 +179,11 @@ func (t *Transport) Timeout(m *diempb.TimeoutMsg) {
 
 // RequestBlock runs a quorum call to every peer on its own goroutine, so a slow
 // fetch holds up no other send. Any reply whose recomputed id is the one asked
-// for is the block, so the first such reply is sunk and the rest are dropped.
-// First would take the first reply without checking it.
+// for is the block, so the first such reply goes to the core and the rest are
+// dropped. First would take the first reply without checking it.
 //
-// Stop does not wait for the goroutine, so a fetch may still reach Sink after
-// it.
+// Stop does not wait for the goroutine, so a fetch may still be waiting for
+// the lock after it, and a stopped core ignores it.
 func (t *Transport) RequestBlock(id []byte) {
 	t.enqueue(func(cfg gorums.Config) { go t.fetch(cfg, id) })
 }
@@ -191,7 +194,7 @@ func (t *Transport) fetch(cfg gorums.Config, id []byte) {
 	req := diempb.BlockHash_builder{Id: id}.Build()
 	for r := range diempb.RequestBlock(cfg.Context(ctx), req).Results().IgnoreErrors() {
 		if t.handler.ver.VerifyBlock(r.Value, id) {
-			t.handler.sink(r.Value)
+			t.handler.block(r.Value)
 			return
 		}
 	}

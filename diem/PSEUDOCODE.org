@@ -23,17 +23,18 @@ The paper's outer loop. There is none here: Gorums runs each sender's
 handlers in order, and the replica's mutex serializes calls into =Core= across
 senders and with the round timer.
 
-- Implemented :: =replica/replica.go:deliver=, =Run=; =core.go:Config= =Lock=.
+- Implemented :: =diemnet/server.go:handler=, =replica/replica.go:Run=;
+  =core.go:Config= =Lock=.
 - Differs :: structurally only; the paper has no concurrency model. No
   protocol difference.
 
 ** start_event_processing(M)
 
-One method per input on =Core=, and one type switch over the =diempb=
-messages that hands each to its method.
+One method per input on =Core=. Each Gorums handler calls the one for its
+message, and a fetched block goes to =OnBlock=.
 
-- Implemented :: =core.go:Dispatch=, over =OnProposal=, =OnVote=,
-  =OnTimeout= and =OnBlock=.
+- Implemented :: =core.go:OnProposal=, =OnVote=, =OnTimeout=, =OnBlock=,
+  called from =diemnet/server.go=. A core that is not running ignores them.
 - Differs :: the paper dispatches a local timeout unconditionally.
   =pacemaker.go:fire= runs =LocalTimeoutRound= only when the timer's epoch is
   still the pacemaker's, which every =Stop= moves on. The timer callback runs on

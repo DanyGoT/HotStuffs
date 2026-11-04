@@ -24,6 +24,8 @@ type Core struct {
 	safety    *Safety
 	pacemaker *Pacemaker
 	leaders   *LeaderElection
+
+	running bool
 }
 
 // Config is everything a Core needs. Every field is required except
@@ -133,12 +135,17 @@ const maxRoundLead = 4
 // The paper leaves bootstrap unspecified; this is the smallest thing that
 // gives round 1 a leader and a parent to extend.
 func (c *Core) Start() {
+	c.running = true
 	c.pacemaker.AdvanceRoundQC(genesisQC)
 	c.processNewRoundEvent(nil)
 }
 
-// Stop disarms the round timer.
-func (c *Core) Stop() { c.pacemaker.Stop() }
+// Stop disarms the round timer. A stopped core ignores its inputs, as one not
+// yet started does: the network can still deliver after the replica stops.
+func (c *Core) Stop() {
+	c.running = false
+	c.pacemaker.Stop()
+}
 
 // State is the scalar snapshot of this replica's progress.
 func (c *Core) State() State {
@@ -153,26 +160,9 @@ func (c *Core) State() State {
 	}
 }
 
-// Dispatch hands m to the method for its type: a verified *diempb message, a
-// fetched *diempb.Block, or a func(*Core). It is the paper's
-// start_event_processing (3.1).
-func (c *Core) Dispatch(m any) {
-	switch m := m.(type) {
-	case *diempb.ProposalMsg:
-		c.OnProposal(m)
-	case *diempb.VoteMsg:
-		c.OnVote(m)
-	case *diempb.TimeoutMsg:
-		c.OnTimeout(m)
-	case *diempb.Block:
-		c.OnBlock(m)
-	case func(*Core):
-		m(c)
-	}
-}
-
 // Block is the block with id from the pending tree, or else from the
-// committed blocks a lagging peer may still be missing; nil if neither has it.
+// committed blocks a lagging peer may still be missing, or nil if neither
+// has it.
 func (c *Core) Block(id []byte) *diempb.Block {
 	if b, ok := c.tree.Block(id); ok {
 		return b
@@ -184,7 +174,11 @@ func (c *Core) Block(id []byte) *diempb.Block {
 // OnBlock inserts a block fetched from a peer. The edge has checked that its
 // recomputed id is the one this replica asked for, and that id came from a
 // verified certificate, so it is the block a quorum voted on.
-func (c *Core) OnBlock(b *diempb.Block) { c.insert(b) }
+func (c *Core) OnBlock(b *diempb.Block) {
+	if c.running {
+		c.insert(b)
+	}
+}
 
 // processCertificateQC is the paper's process_certificate_qc. The order
 // matters: LeaderElection reads the round the certificate arrived in, so it
@@ -203,6 +197,9 @@ func (c *Core) processCertificateQC(qc *diempb.QuorumCert) bool {
 // already happened at the edge, on the goroutine the message arrived on, so
 // what is left here is authorization by protocol state.
 func (c *Core) OnProposal(p *diempb.ProposalMsg) {
+	if !c.running {
+		return
+	}
 	block := p.GetBlock()
 	c.processCertificateQC(block.GetQc())
 	c.processCertificateQC(p.GetHighCommitQc())
@@ -242,6 +239,9 @@ func (c *Core) insert(b *diempb.Block) {
 
 // OnTimeout is the paper's process_timeout_msg.
 func (c *Core) OnTimeout(m *diempb.TimeoutMsg) {
+	if !c.running {
+		return
+	}
 	c.processCertificateQC(m.GetTmoInfo().GetHighQc())
 	c.processCertificateQC(m.GetHighCommitQc())
 	c.pacemaker.AdvanceRoundTC(m.GetLastRoundTc())
@@ -256,6 +256,9 @@ func (c *Core) OnTimeout(m *diempb.TimeoutMsg) {
 
 // OnVote is the paper's process_vote_msg.
 func (c *Core) OnVote(m *diempb.VoteMsg) {
+	if !c.running {
+		return
+	}
 	round, current := m.GetVoteInfo().GetRound(), c.pacemaker.CurrentRound()
 	if round > current+maxRoundLead || round+1 < current {
 		return
