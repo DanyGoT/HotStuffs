@@ -27,7 +27,7 @@ type Config struct {
 	ID       uint32
 	Peers    map[uint32]string // every replica's address, this one included
 	Listen   string            // ":0" picks a free port; read it back with Addr
-	Sink     func(any)         // where verified inputs go: diem.Queue.Push
+	Sink     func(any)         // where verified inputs go
 	Verifier *diem.Verifier
 
 	OutQueue      int // outbound queue depth; 0 picks a default
@@ -138,7 +138,7 @@ func (t *Transport) Start() {
 }
 
 // Stop shuts the server down and waits for the sender to finish. Stop the
-// consensus loop before calling this.
+// core before calling this.
 func (t *Transport) Stop() {
 	t.cancel()
 	t.srv.Stop()
@@ -239,7 +239,7 @@ func (t *Transport) drain() {
 			}
 			// GORUMS: a one-way Send blocks once a node's send queue fills, and
 			// Async is the only alternative, so the bounded queue in front of
-			// this goroutine is what keeps the consensus goroutine free.
+			// this goroutine is what keeps a core call from blocking on a send.
 			fn(cfg)
 		}
 	}

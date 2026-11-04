@@ -11,7 +11,7 @@ import (
 
 // handler is the inbound half of the transport. Every message is verified
 // here, on the Gorums handler goroutine that already runs in parallel across
-// senders, so no signature check ever reaches the consensus goroutine.
+// senders, so no signature check is made under the replica's lock.
 //
 // GORUMS: ServerContext exposes no authenticated sender identity — the
 // gorums-node-id metadata key is internal, and peer.FromContext gives an
@@ -60,9 +60,8 @@ func (h *handler) Timeout(_ gorums.ServerContext, in *diempb.TimeoutMsg) {
 
 var errNoBlock = errors.New("diemnet: block not held")
 
-// RequestBlock is answered by the consensus goroutine, which owns the blocks.
-// The stream is released once the request is queued, so a slow answer does not
-// hold up this sender's later messages, and FIFO into the queue is kept.
+// RequestBlock is answered by the core, which owns the blocks. A replica that
+// has stopped does not answer, and the request ends with its context.
 func (h *handler) RequestBlock(ctx gorums.ServerContext, in *diempb.BlockHash) (*diempb.Block, error) {
 	reply := make(chan *diempb.Block, 1)
 	h.sink(func(c *diem.Core) { reply <- c.Block(in.GetId()) })
