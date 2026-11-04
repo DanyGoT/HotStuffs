@@ -130,7 +130,7 @@ func New(cfg Config) *Replica {
 		Backoff:      diem.NewBackoff(cfg.RoundTimeout, cfg.MaxRoundTimeout, backoffFactor),
 		Sink:         q.Push,
 		Transactions: cfg.Transactions,
-		Observer: func(_ diem.Event, s diem.State, _ time.Duration) {
+		Observer: func(s diem.State) {
 			r.declined.Store(s.DeclinedMissingAncestor)
 		},
 	})

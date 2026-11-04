@@ -2,20 +2,18 @@ package diem
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
 )
 
-// Core is the paper's Main module (3.1): the event loop that dispatches
-// messages to the other modules. It owns all protocol state and runs on a
+// Core is the paper's Main module (3.1): one method per input, each
+// dispatching to the other modules. It owns all protocol state and runs on a
 // single goroutine, so it holds no locks, and it never enqueues — every
 // self-addressed message goes out through the transport's local node.
 type Core struct {
 	id     uint32
 	crypto Crypto
 	net    Transport
-	clock  Clock
 
 	transactions func() [][]byte
 
@@ -25,7 +23,7 @@ type Core struct {
 	pacemaker *Pacemaker
 	leaders   *LeaderElection
 
-	observe func(Event, State, time.Duration)
+	observe func(State)
 }
 
 // Config is everything a Core needs. Every field is required except
@@ -39,10 +37,10 @@ type Config struct {
 	Clock      Clock
 	Backoff    *Backoff
 
-	// Sink accepts events from any goroutine. Only the round timer uses it:
-	// its callback runs off the consensus goroutine, so it may enqueue and
+	// Sink accepts Queue inputs from any goroutine. Only the round timer uses
+	// it: its callback runs off the consensus goroutine, so it may enqueue and
 	// nothing else. Production passes Queue.Push.
-	Sink func(Event)
+	Sink func(any)
 
 	// Transactions supplies the payload for a leader's proposal (paper 3.6).
 	// Nil proposes empty blocks, which still commits the pipeline below them.
@@ -54,10 +52,10 @@ type Config struct {
 	WindowSize  int
 	ExcludeSize int
 
-	// Observer, if set, runs after every event with the state it produced and
-	// how long the step took. It is the only hook the core exposes, and it is
-	// enough: every protocol-level counter is a delta on that snapshot.
-	Observer func(Event, State, time.Duration)
+	// Observer, if set, runs after every input the Loop processes, with the
+	// state it produced. Every protocol-level counter is a delta on that
+	// snapshot.
+	Observer func(State)
 }
 
 // State is the scalar snapshot an observer sees.
@@ -105,7 +103,6 @@ func New(cfg Config) *Core {
 		id:     cfg.ID,
 		crypto: cfg.Crypto,
 		net:    cfg.Transport,
-		clock:  cfg.Clock,
 
 		transactions: cfg.Transactions,
 
@@ -161,47 +158,20 @@ func (c *Core) State() State {
 	}
 }
 
-// Step is the whole protocol surface — the paper's start_event_processing. The
-// event set is sealed, so this switch is exhaustive and needs no default.
-func (c *Core) Step(e Event) {
-	if c.observe != nil {
-		start := c.clock.Now()
-		defer func() { c.observe(e, c.State(), c.clock.Now().Sub(start)) }()
+// Block is the block with id from the pending tree, or else from the
+// committed blocks a lagging peer may still be missing; nil if neither has it.
+func (c *Core) Block(id []byte) *diempb.Block {
+	if b, ok := c.tree.Block(id); ok {
+		return b
 	}
-	switch e := e.(type) {
-	case ProposalEvent:
-		c.processProposalMsg(e.Msg)
-	case VoteEvent:
-		c.processVoteMsg(e.Msg)
-	case TimeoutEvent:
-		c.processTimeoutMsg(e.Msg)
-	case LocalTimeoutEvent:
-		// The paper dispatches this unconditionally (3.1, start_event_processing:
-		// local timeout -> Pacemaker.local_timeout_round()). The epoch is checked
-		// first because the timer callback runs off this goroutine and only
-		// enqueues: a callback that had already fired when startTimer or Stop
-		// disarmed the timer is still sitting in the queue. Running it would
-		// abandon a round the replica has since entered on a perfectly good
-		// certificate, or time out a re-armed round a second time.
-		if e.Epoch == c.pacemaker.Epoch() {
-			c.pacemaker.LocalTimeoutRound()
-		}
-	case BlockEvent:
-		c.insert(e.Block)
-	case BlockRequestEvent:
-		c.serveBlock(e)
-	}
+	b, _ := c.ledger.CommittedBlock(id)
+	return b
 }
 
-// serveBlock answers from the pending tree, then from the committed blocks a
-// lagging peer may still be missing.
-func (c *Core) serveBlock(r BlockRequestEvent) {
-	b, ok := c.tree.Block(r.ID)
-	if !ok {
-		b, _ = c.ledger.CommittedBlock(r.ID)
-	}
-	r.Reply <- b
-}
+// OnBlock inserts a block fetched from a peer. The edge has checked that its
+// recomputed id is the one this replica asked for, and that id came from a
+// verified certificate, so it is the block a quorum voted on.
+func (c *Core) OnBlock(b *diempb.Block) { c.insert(b) }
 
 // processCertificateQC is the paper's process_certificate_qc. The order
 // matters: LeaderElection reads the round the certificate arrived in, so it
@@ -216,10 +186,10 @@ func (c *Core) processCertificateQC(qc *diempb.QuorumCert) bool {
 	return c.pacemaker.AdvanceRoundQC(qc)
 }
 
-// processProposalMsg is the paper's process_proposal_msg. Authentication has
+// OnProposal is the paper's process_proposal_msg. Authentication has
 // already happened at the edge, on the goroutine the message arrived on, so
 // what is left here is authorization by protocol state.
-func (c *Core) processProposalMsg(p *diempb.ProposalMsg) {
+func (c *Core) OnProposal(p *diempb.ProposalMsg) {
 	block := p.GetBlock()
 	c.processCertificateQC(block.GetQc())
 	c.processCertificateQC(p.GetHighCommitQc())
@@ -257,7 +227,8 @@ func (c *Core) insert(b *diempb.Block) {
 	}
 }
 
-func (c *Core) processTimeoutMsg(m *diempb.TimeoutMsg) {
+// OnTimeout is the paper's process_timeout_msg.
+func (c *Core) OnTimeout(m *diempb.TimeoutMsg) {
 	c.processCertificateQC(m.GetTmoInfo().GetHighQc())
 	c.processCertificateQC(m.GetHighCommitQc())
 	c.pacemaker.AdvanceRoundTC(m.GetLastRoundTc())
@@ -270,7 +241,8 @@ func (c *Core) processTimeoutMsg(m *diempb.TimeoutMsg) {
 	c.processNewRoundEvent(tc)
 }
 
-func (c *Core) processVoteMsg(m *diempb.VoteMsg) {
+// OnVote is the paper's process_vote_msg.
+func (c *Core) OnVote(m *diempb.VoteMsg) {
 	round, current := m.GetVoteInfo().GetRound(), c.pacemaker.CurrentRound()
 	if round > current+maxRoundLead || round+1 < current {
 		return

@@ -20,24 +20,24 @@ covers only the mapping.
 ** EventLoop
 
 The paper's outer loop. Split in three here, because the core is drivable at
-three levels: =Core.Step= for state-machine unit tests, =Loop.Tick= for the
-deterministic harness, =Loop.Run= in production.
+three levels: the =Core= methods for state-machine unit tests, =Loop.Tick= for
+the deterministic harness, =Loop.Run= in production.
 
-- Implemented :: =loop.go:Run=, =Tick=, =events.go:Queue=, =Push=.
+- Implemented :: =loop.go:Run=, =Tick=, =Queue=, =Push=.
 - Differs :: structurally only. The queue is the goroutine boundary and the
   only backpressure point in the replica; the paper has no concurrency model to
   place one in. No protocol difference.
 
 ** start_event_processing(M)
 
-One switch over the sealed =Event= set, so the dispatch is exhaustive by
-construction and needs no default case.
+One method per input on =Core=, and one type switch over the =diempb=
+messages that hands each to its method.
 
-- Implemented :: =core.go:Step=; the event set is =events.go:Event= with its
-  four members.
-- Differs :: the paper dispatches a local timeout unconditionally. =Step=
-  runs =Pacemaker.LocalTimeoutRound= only when the event's =Epoch= is still
-  =Pacemaker.Epoch()=, which every =Stop= moves on. The timer callback runs off
+- Implemented :: =loop.go:dispatch=, over =core.go:OnProposal=, =OnVote=,
+  =OnTimeout= and =OnBlock=.
+- Differs :: the paper dispatches a local timeout unconditionally.
+  =pacemaker.go:fire= runs =LocalTimeoutRound= only when the timer's epoch is
+  still the pacemaker's, which every =Stop= moves on. The timer callback runs off
   the consensus goroutine and only enqueues, so a callback that had already
   fired when =startTimer= or =Stop= disarmed the timer is still sitting in the
   queue. Running it would abandon a round the replica entered on a good
@@ -63,7 +63,7 @@ Advance on all three certificates the proposal carries, then check that the
 block's round is the current round and that its sender and author both lead it,
 then speculate and insert, then vote.
 
-- Implemented :: =core.go:processProposalMsg=; the vote goes out to
+- Implemented :: =core.go:OnProposal=; the vote goes out to
   =LeaderElection.GetLeader(round+1)=, unicast, as the paper specifies.
 - Differs :: no protocol difference. What changed is *where* authentication
   happens: signatures, quorum sizes, certificate well-formedness and signer
@@ -79,7 +79,7 @@ Advance on the timeout's =HighQC=, its =HighCommitQC= and its =LastRoundTC=,
 then accumulate it; a TC that completes advances the round and fires a new-round
 event.
 
-- Implemented :: =core.go:processTimeoutMsg=.
+- Implemented :: =core.go:OnTimeout=.
 - Faithful :: no deviation.
 
 ** process_vote_msg(M)
@@ -87,8 +87,8 @@ event.
 Accumulate the vote; a certificate that completes is processed and a new-round
 event fires.
 
-- Implemented :: =core.go:processVoteMsg=.
-- Differs :: =processVoteMsg= ignores votes more than =maxRoundLead=
+- Implemented :: =core.go:OnVote=.
+- Differs :: =OnVote= ignores votes more than =maxRoundLead=
   (=core.go:maxRoundLead=, 4) rounds ahead, or older than the previous round.
   The paper accepts all. Each distinct vote opens its own bucket, a faulty
   node can make every vote distinct, and buckets are only freed on commit —
@@ -525,7 +525,7 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   yield many valid block ids, and each would enter the block tree and the
   speculation tree.
 - The round bounds :: =core.go:maxRoundLead= and the previous-round floor,
-  both applied in =processVoteMsg=. The paper puts no limit on how far ahead
+  both applied in =OnVote=. The paper puts no limit on how far ahead
   or behind a vote's round may be.
 - The missing-ancestor counter :: =safety.go:declinedMissingAncestor= and its
   accessor =DeclinedMissingAncestor=, incremented in =MakeVote= and surfaced
@@ -533,8 +533,8 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   It counts the votes a replica declines before block sync fills a gap. It is
   the number the report should quote about the gap, rather than an argument
   about whether section 3 is livelocked in principle.
-- Block sync :: =core.go:insert= and =serveBlock=, =ledger.go:Missing=,
-  =verify.go:VerifyBlock=, =events.go:BlockEvent= and =BlockRequestEvent=, the
+- Block sync :: =core.go:insert=, =OnBlock= and =Block=, =ledger.go:Missing=,
+  =verify.go:VerifyBlock=, the
   =RequestBlock= quorum call over =diem.proto:BlockHash=, and
   =diemnet/gorums.go:RequestBlock=.
   Section 3 defines no way to fetch a block. A block whose parent this replica
@@ -548,7 +548,7 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   The paper's ledger is unbounded; =committed_block= must still answer for
   everything =elect_reputation_leader= walks back over, so the bound is what
   =electReputationLeader='s termination guard exists for.
-- The event queue and driver :: =events.go:Queue=, =loop.go:Loop=.
+- The queue and driver :: =loop.go:Queue=, =Loop=.
   The goroutine boundary, the only backpressure point, and the queue high-water
   mark.
 - The seams :: =seams.go:Transport=, where the paper writes "send" and
@@ -558,7 +558,7 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   paper writes =hash()=. Six distinct tags keep a vote signature from ever
   verifying as a timeout signature, or either as a block id.
 - Observability :: =core.go:State=, the snapshot type and its accessor, and the
-  =Observer= hook (=core.go:Observer=).
+  =Observer= hook (=core.go:Config=), which =Loop= runs after every input.
 - MemPool ingress :: =mempool.go:Add=.
 
 * Where the paper is self-contradictory
@@ -573,7 +573,7 @@ section 3 itself rejects.
 and =process_timeout_msg= calls =Pacemaker.advance_round(tc)= — one with a
 round, one with a certificate. The Pacemaker module (3.5) defines neither; it
 defines =advance_round_qc(qc)= and =advance_round_tc(tc)=. Read as the typed
-pair, which is what =core.go:processCertificateQC= and =processTimeoutMsg=
+pair, which is what =core.go:processCertificateQC= and =OnTimeout=
 implement. Harmless, but it
 is the reason a reader comparing the two modules side by side finds no match.
 

@@ -18,7 +18,7 @@ type Pacemaker struct {
 
 	clock  Clock
 	dur    *Backoff
-	sink   func(Event)
+	sink   func(any)
 	net    Transport
 	safety *Safety
 	tree   *BlockTree
@@ -27,7 +27,7 @@ type Pacemaker struct {
 	lastRoundTC     *diempb.TimeoutCert
 	pendingTimeouts map[uint64]*timeoutBucket
 	timer           Timer
-	epoch           uint64
+	epoch           uint64 // identifies the armed timer; Stop increments it
 }
 
 // timeoutBucket accumulates the timeouts reported for one round, deduplicated
@@ -39,7 +39,7 @@ type timeoutBucket struct {
 
 // NewPacemaker returns a pacemaker at round 0 with no timer armed. Start on
 // Core does the first advance.
-func NewPacemaker(quorum, faulty int, clock Clock, dur *Backoff, sink func(Event), net Transport, safety *Safety, tree *BlockTree) *Pacemaker {
+func NewPacemaker(quorum, faulty int, clock Clock, dur *Backoff, sink func(any), net Transport, safety *Safety, tree *BlockTree) *Pacemaker {
 	return &Pacemaker{
 		quorum:          quorum,
 		faulty:          faulty,
@@ -59,9 +59,6 @@ func (p *Pacemaker) CurrentRound() uint64 { return p.currentRound }
 // LastRoundTC is the certificate that justified entry to the current round, or
 // nil when a QC justified it.
 func (p *Pacemaker) LastRoundTC() *diempb.TimeoutCert { return p.lastRoundTC }
-
-// Epoch identifies the armed timer. Stop increments it.
-func (p *Pacemaker) Epoch() uint64 { return p.epoch }
 
 // Stop disarms the round timer.
 func (p *Pacemaker) Stop() {
@@ -86,8 +83,20 @@ func (p *Pacemaker) startTimer(newRound uint64) {
 	// The callback runs off the consensus goroutine, so it may only enqueue.
 	epoch := p.epoch
 	p.timer = p.clock.AfterFunc(p.dur.Duration(), func() {
-		p.sink(LocalTimeoutEvent{Epoch: epoch})
+		p.sink(func(*Core) { p.fire(epoch) })
 	})
+}
+
+// fire runs on the consensus goroutine for the timer armed in epoch. The paper
+// calls local_timeout_round unconditionally (3.1, start_event_processing). The
+// epoch is checked first because the callback only enqueues: one that had
+// already fired when startTimer or Stop disarmed its timer is still queued.
+// Running it would abandon a round the replica has since entered on a good
+// certificate, or time out a re-armed round a second time.
+func (p *Pacemaker) fire(epoch uint64) {
+	if epoch == p.epoch {
+		p.LocalTimeoutRound()
+	}
 }
 
 // LocalTimeoutRound broadcasts this replica's timeout for the current round.

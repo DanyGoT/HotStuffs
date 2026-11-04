@@ -19,7 +19,7 @@ type Transport interface {
 	// Timeout sends to all replicas, this one included.
 	Timeout(*diempb.TimeoutMsg)
 	// RequestBlock asks every replica for the block with id. The block, if one
-	// comes back, arrives as a BlockEvent.
+	// comes back, arrives through Core.OnBlock.
 	RequestBlock(id []byte)
 }
 
@@ -41,7 +41,7 @@ type Clock interface {
 type Timer interface{ Stop() bool }
 
 // SystemClock is the wall-clock Clock. time.AfterFunc runs its callback on its
-// own goroutine, which is why a timer callback may only enqueue an event.
+// own goroutine, which is why a timer callback may only enqueue.
 type SystemClock struct{}
 
 func (SystemClock) Now() time.Time { return time.Now() }

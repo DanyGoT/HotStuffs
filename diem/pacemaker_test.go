@@ -26,28 +26,28 @@ func (n *recordNet) RequestBlock([]byte)          {}
 
 var _ Transport = (*recordNet)(nil)
 
-// recordSink returns a sink appending the events pushed to it, in order, to
-// *log.
-func recordSink(log *[]Event) func(Event) {
-	return func(e Event) { *log = append(*log, e) }
+// recordSink returns a sink appending the timer callbacks pushed to it, in
+// order, to *log.
+func recordSink(log *[]func(*Core)) func(any) {
+	return func(m any) { *log = append(*log, m.(func(*Core))) }
 }
 
 // newTestPacemaker returns a pacemaker for a replica set of size n, replica id
 // 1, wired to test doubles for the clock, sink and transport.
-func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fakeClock, *recordNet, *[]Event) {
+func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fakeClock, *recordNet, *[]func(*Core)) {
 	t.Helper()
 	quorum := QuorumSize(n)
 	faulty := Faulty(n)
 	clock := newFakeClock()
 	net := &recordNet{}
-	events := new([]Event)
+	fired := new([]func(*Core))
 	ledger := NewMemLedger()
 	crypto := newTestSigner(n)
 	tree := NewBlockTree(1, quorum, ledger, crypto)
 	safety := NewSafety(1, NewVerifier(crypto, quorum), crypto, ledger, tree)
 	dur := NewBackoff(10*time.Millisecond, time.Second, 2)
-	pm := NewPacemaker(quorum, faulty, clock, dur, recordSink(events), net, safety, tree)
-	return pm, clock, net, events
+	pm := NewPacemaker(quorum, faulty, clock, dur, recordSink(fired), net, safety, tree)
+	return pm, clock, net, fired
 }
 
 // timeoutInfoFrom builds a well-signed TimeoutInfo for sender, as if it were
@@ -148,21 +148,18 @@ func TestAdvanceRoundTCEntersNextRoundAndRecordsTC(t *testing.T) {
 	}
 }
 
-func TestStartTimerPushesLocalTimeoutEventForItsOwnEpoch(t *testing.T) {
-	pm, clock, _, events := newTestPacemaker(t, 4)
-	pm.startTimer(7)
+func TestStartTimerFiresLocalTimeoutRound(t *testing.T) {
+	pm, clock, net, fired := newTestPacemaker(t, 4)
+	pm.AdvanceRoundQC(genesisQC)
 
 	clock.Advance(pm.dur.Duration())
 
-	if len(*events) != 1 {
-		t.Fatalf("sink got %d events, want 1", len(*events))
+	if len(*fired) != 1 {
+		t.Fatalf("sink got %d timer callbacks, want 1", len(*fired))
 	}
-	ev, ok := (*events)[0].(LocalTimeoutEvent)
-	if !ok {
-		t.Fatalf("event type = %T, want LocalTimeoutEvent", (*events)[0])
-	}
-	if ev.Epoch != pm.Epoch() {
-		t.Fatalf("LocalTimeoutEvent.Epoch = %d, want the armed timer's %d", ev.Epoch, pm.Epoch())
+	(*fired)[0](nil)
+	if len(net.timeouts) != 1 {
+		t.Fatalf("the armed timer broadcast %d timeouts, want 1", len(net.timeouts))
 	}
 }
 
@@ -340,13 +337,13 @@ func TestBackoffGrowsOncePerFailedRound(t *testing.T) {
 // entered on a QC the tree never saw, so high_qc stays at genesis and
 // MakeTimeout declines.
 func TestLocalTimeoutRoundRearmsWhenRefused(t *testing.T) {
-	pm, clock, net, events := newTestPacemaker(t, 4)
+	pm, clock, net, fired := newTestPacemaker(t, 4)
 	if !pm.AdvanceRoundQC(bareQC(nil, 4)) {
 		t.Fatal("setup: AdvanceRoundQC(round 4) should have entered round 5")
 	}
 	clock.Advance(pm.dur.Duration())
-	if len(*events) != 1 {
-		t.Fatalf("setup: the round timer pushed %d events, want 1", len(*events))
+	if len(*fired) != 1 {
+		t.Fatalf("setup: the round timer pushed %d callbacks, want 1", len(*fired))
 	}
 
 	pm.LocalTimeoutRound()
@@ -355,8 +352,8 @@ func TestLocalTimeoutRoundRearmsWhenRefused(t *testing.T) {
 	}
 
 	clock.Advance(pm.dur.Duration())
-	if len(*events) != 2 {
-		t.Fatalf("no timer re-armed after a refused timeout: %d events, want 2", len(*events))
+	if len(*fired) != 2 {
+		t.Fatalf("no timer re-armed after a refused timeout: %d callbacks, want 2", len(*fired))
 	}
 }
 
