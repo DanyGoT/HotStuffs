@@ -27,7 +27,7 @@ test:
 race:
 	go test -race ./...
 
-# The protocol core runs on one goroutine; concurrency lives outside diem.
+# diem has no go statements. The replica serializes calls into the core.
 check-deps:
 	@! grep -rEq --include='*.go' '^[[:space:]]*go ' diem
 	@echo "check-deps: ok"

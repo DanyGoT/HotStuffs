@@ -8,7 +8,6 @@ import (
 	"maps"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/crypto"
@@ -20,7 +19,6 @@ import (
 )
 
 const (
-	defaultQueueSize    = 4096
 	defaultRoundTimeout = 500 * time.Millisecond
 	backoffFactor       = 2
 )
@@ -37,7 +35,6 @@ type Config struct {
 	// Transactions supplies a leader's payload; nil proposes empty blocks.
 	Transactions func() [][]byte
 
-	QueueSize       int
 	RoundTimeout    time.Duration
 	MaxRoundTimeout time.Duration
 
@@ -51,42 +48,34 @@ type Config struct {
 	DialOptions []gorums.DialOption
 }
 
-// Replica is one DiemBFT replica: a protocol core, its event loop, and the
-// Gorums transport underneath.
+// Replica is one DiemBFT replica: a protocol core and the Gorums transport
+// underneath.
 type Replica struct {
 	id   uint32
 	core *diem.Core
-	loop *diem.Loop
 	net  *diemnet.Transport
-	q    diem.Queue
 
-	// mu guards the commit log, which the ledger appends to on the consensus
-	// goroutine and callers read from their own. It guards application state,
-	// never protocol state.
+	// mu serializes every call into the core: inbound messages, fetched
+	// blocks and the round timer. Gorums runs one sender's handlers in order,
+	// and mu serializes them across senders. It also guards stopped, commits,
+	// commands and proposed. The core writes the last three through the
+	// ledger and the transport.
 	mu       sync.Mutex
+	stopped  bool
 	commits  []*diempb.Block
 	commands uint64
 
 	// proposed is when this replica sent its proposal for each round it led and
-	// has not yet seen committed. Only the consensus goroutine touches it.
+	// has not yet seen committed.
 	proposed map[uint64]time.Time
-
-	// declined mirrors diem.State.DeclinedMissingAncestor out of the loop
-	// goroutine, which is the only way to read it: the core's state is not
-	// shared. It counts the votes lost while a missing block was fetched.
-	declined atomic.Uint64
 
 	measure benchkit.Options
 	m       *benchkit.Measurement
 	result  *benchkit.Result
 }
 
-// New wires a replica. The event queue is the only dependency-free piece, so it
-// comes first, and both the transport and the core hang off it.
+// New wires a replica.
 func New(cfg Config) *Replica {
-	if cfg.QueueSize == 0 {
-		cfg.QueueSize = defaultQueueSize
-	}
 	if cfg.RoundTimeout == 0 {
 		cfg.RoundTimeout = defaultRoundTimeout
 	}
@@ -105,9 +94,7 @@ func New(cfg Config) *Replica {
 
 	validators := slices.Sorted(maps.Keys(cfg.Keys))
 	signer := crypto.New(cfg.Key, cfg.Keys)
-	q := diem.NewQueue(cfg.QueueSize)
-
-	r := &Replica{id: cfg.ID, q: q, proposed: map[uint64]time.Time{}, measure: cfg.Measure}
+	r := &Replica{id: cfg.ID, proposed: map[uint64]time.Time{}, measure: cfg.Measure}
 	ledger := diem.NewMemLedger()
 	ledger.OnCommit = r.commit
 
@@ -115,7 +102,7 @@ func New(cfg Config) *Replica {
 		ID:          cfg.ID,
 		Peers:       cfg.Peers,
 		Listen:      cfg.Listen,
-		Sink:        q.Push,
+		Sink:        r.deliver,
 		Verifier:    diem.NewVerifier(signer, diem.QuorumSize(len(validators))),
 		Server:      cfg.Server,
 		DialOptions: cfg.DialOptions,
@@ -128,14 +115,20 @@ func New(cfg Config) *Replica {
 		Transport:    stamper{r.net, r.proposed},
 		Clock:        diem.SystemClock{},
 		Backoff:      diem.NewBackoff(cfg.RoundTimeout, cfg.MaxRoundTimeout, backoffFactor),
-		Sink:         q.Push,
+		Lock:         &r.mu,
 		Transactions: cfg.Transactions,
-		Observer: func(s diem.State) {
-			r.declined.Store(s.DeclinedMissingAncestor)
-		},
 	})
-	r.loop = diem.NewLoop(r.core, q)
 	return r
+}
+
+// deliver hands a verified input to the core, once it has started and until
+// it has stopped.
+func (r *Replica) deliver(m any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.stopped {
+		r.core.Dispatch(m)
+	}
 }
 
 // stamper records when this replica sends each of its proposals.
@@ -151,7 +144,8 @@ func (s stamper) Proposal(p *diempb.ProposalMsg) {
 
 // commit appends b to the log and, for a block this replica proposed, records
 // its propose-to-commit latency. Rounds at or below b's can no longer commit
-// a block of this replica's, so their stamps go too.
+// a block of this replica's, so their stamps go too. It runs inside a core
+// call, so mu is already held.
 func (r *Replica) commit(b *diempb.Block) {
 	if t, ok := r.proposed[b.GetRound()]; ok && b.GetAuthor() == r.id {
 		r.m.Stats.AddLatency(time.Since(t))
@@ -161,67 +155,52 @@ func (r *Replica) commit(b *diempb.Block) {
 			}
 		}
 	}
-	r.mu.Lock()
 	r.commits = append(r.commits, b)
 	r.commands += uint64(len(b.GetPayload()))
-	r.mu.Unlock()
 }
 
-// Run serves the transport, waits for every peer, then runs the consensus loop
-// until ctx is done or Measure.Duration has passed. Waiting for peers before
-// the first round matters: a proposal multicast into a half-connected
+// Run serves the transport, waits for every peer, then runs consensus until
+// ctx is done or Measure.Duration has passed. Waiting for peers before the
+// first round matters: a proposal multicast into a half-connected
 // configuration is simply lost, and the replicas that missed it must fetch it
-// before they can vote again. Cancelling ctx is how a replica
-// stops; the transport is shut down after the loop, never before.
+// before they can vote again. mu is held until the core has started, so a
+// message that arrives earlier waits for it. Cancelling ctx is how a replica
+// stops; the transport is shut down after the core, never before.
 func (r *Replica) Run(ctx context.Context) error {
+	r.mu.Lock()
 	r.net.Start()
 	if err := r.net.WaitForPeers(ctx); err != nil {
-		r.stop()
+		r.stopped = true
+		r.mu.Unlock()
+		r.net.Stop()
 		return err
 	}
 	r.m = benchkit.StartMeasurement(r.measure)
 	r.core.Start()
+	r.mu.Unlock()
+
 	if d := r.measure.Duration; d > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
-	err := r.loop.Run(ctx)
+	<-ctx.Done()
+
+	// Gorums does not wait for its handler goroutines on Stop, so a late
+	// message can still reach deliver; stopped turns it away.
+	r.mu.Lock()
+	r.stopped = true
+	r.core.Stop()
 	r.result = r.m.Finish()
-	r.stop()
-	return err
+	r.mu.Unlock()
+	r.net.Stop()
+	return ctx.Err()
 }
 
 // Result is the run's measurement: an op is a committed block this replica
 // proposed, timed propose to commit on its own clock. Read it only after Run
 // returns; it is nil if Run never reached the first round.
 func (r *Replica) Result() *benchkit.Result { return r.result }
-
-// stop shuts the transport down and keeps the inbound queue moving while it
-// does. That queue is bounded and blocking by design, so a handler parked on a
-// push the loop has stopped answering never returns — and Gorums dispatches
-// each handler on a goroutine it never waits for, so shutting down without
-// draining simply strands them. Events read here are discarded: the core has
-// stopped, and nothing can act on them.
-func (r *Replica) stop() {
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		r.net.Stop()
-	}()
-	for {
-		select {
-		case <-stopped:
-			// Whatever reached the queue before the transport went down is
-			// still holding its producer; let the last of them through.
-			for len(r.q) > 0 {
-				<-r.q
-			}
-			return
-		case <-r.q:
-		}
-	}
-}
 
 // ID is this replica's identity.
 func (r *Replica) ID() uint32 { return r.id }
@@ -230,8 +209,7 @@ func (r *Replica) ID() uint32 { return r.id }
 func (r *Replica) Addr() string { return r.net.Addr() }
 
 // Log is the committed blocks, in commit order. It is safe to call from any
-// goroutine; the core's own state deliberately is not exposed, since it belongs
-// to the loop goroutine alone.
+// goroutine.
 func (r *Replica) Log() []*diempb.Block {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -252,8 +230,8 @@ func (r *Replica) Counters() diemnet.Counters { return r.net.Counters() }
 // had not yet seen a block's ancestry. Until it has fetched the missing block,
 // a replica that loses one proposal cannot vote on its descendants either; this
 // is the number that says what that costs.
-func (r *Replica) DeclinedMissingAncestor() uint64 { return r.declined.Load() }
-
-// QueueHighWater is the deepest the inbound event queue has been, which is what
-// says whether inbound backpressure was ever felt.
-func (r *Replica) QueueHighWater() int { return r.loop.QueueHighWater() }
+func (r *Replica) DeclinedMissingAncestor() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.core.State().DeclinedMissingAncestor
+}

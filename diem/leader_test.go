@@ -1,6 +1,7 @@
 package diem
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func newTestLeaderElection(t *testing.T, validators []uint32, window, exclude in
 	tree := NewBlockTree(1, quorum, ledger, crypto)
 	safety := NewSafety(1, NewVerifier(crypto, quorum), crypto, ledger, tree)
 	dur := NewBackoff(10*time.Millisecond, time.Second, 2)
-	pm := NewPacemaker(quorum, faulty, newFakeClock(), dur, func(any) {}, &recordNet{}, safety, tree)
+	pm := NewPacemaker(quorum, faulty, newFakeClock(), dur, new(sync.Mutex), &recordNet{}, safety, tree)
 	le := NewLeaderElection(validators, window, exclude, ledger, pm)
 	return le, pm, ledger
 }

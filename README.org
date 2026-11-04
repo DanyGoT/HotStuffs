@@ -21,7 +21,8 @@ needs =nix develop=.
 
 * Layout
 
-- =diem/= is the protocol. It has no networking and runs on one goroutine.
+- =diem/= is the protocol. It has no networking and is not thread-safe: the
+  replica serializes every call into it.
 - =diemnet/= sends and receives its messages over Gorums.
 - =proto/diempb/= defines the messages.
 - =crypto/= signs and verifies them.

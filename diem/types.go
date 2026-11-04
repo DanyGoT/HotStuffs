@@ -1,6 +1,6 @@
 // Package diem implements the DiemBFT v4 pseudocode of the paper's Section 3,
 // one file per module: Ledger (3.2), Block-tree (3.3), Safety (3.4), Pacemaker
-// (3.5), MemPool (3.6), LeaderElection (3.7) and the Main event loop (3.1).
+// (3.5), MemPool (3.6), LeaderElection (3.7) and Main (3.1) in core.go.
 // It commits on a contiguous 2-chain and signs a LedgerCommitInfo.
 //
 // It works directly on the generated diempb messages, which are read-only once

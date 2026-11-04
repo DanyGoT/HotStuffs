@@ -9,8 +9,8 @@ import (
 
 // Verifier authenticates inbound messages. It holds no protocol state — every
 // check here is a function of the message and the replica set alone — which is
-// what lets it run on the network's handler goroutines rather than on the
-// consensus goroutine.
+// what lets it run on the network's handler goroutines, before a message
+// reaches the core.
 //
 // The leader check cannot live here: LeaderElection.GetLeader (3.7) has a
 // reputation path keyed on the committed blocks, so a round's leader is a

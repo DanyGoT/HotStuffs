@@ -3,9 +3,9 @@ package replica
 import "time"
 
 // Payload is a synthetic workload: batches of identical commands of a fixed
-// size, capped at a target rate. Transactions is called only from the
-// consensus goroutine, so it needs no lock, and it never blocks — it returns
-// nothing when this instant's budget is spent.
+// size, capped at a target rate. Transactions is called only inside a core
+// call, under the replica's lock, so it needs none of its own, and it never
+// blocks — it returns nothing when this instant's budget is spent.
 type Payload struct {
 	cmd    []byte
 	batch  int

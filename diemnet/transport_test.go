@@ -47,7 +47,7 @@ func signer(t *testing.T, id uint32, n int) *crypto.Signer {
 
 // recv reads one input off q, failing the test after a generous timeout rather
 // than blocking forever on a bug.
-func recv(t *testing.T, q diem.Queue) any {
+func recv(t *testing.T, q chan any) any {
 	t.Helper()
 	select {
 	case e := <-q:
@@ -58,8 +58,11 @@ func recv(t *testing.T, q diem.Queue) any {
 	}
 }
 
+// sink pushes onto q, blocking when it is full.
+func sink(q chan any) func(any) { return func(m any) { q <- m } }
+
 // drained reports whether q is empty right now.
-func drained(q diem.Queue) bool {
+func drained(q chan any) bool {
 	select {
 	case <-q:
 		return false
@@ -70,7 +73,7 @@ func drained(q diem.Queue) bool {
 
 type peer struct {
 	tr *Transport
-	q  diem.Queue
+	q  chan any
 }
 
 // newGroup builds n Gorums-local replicas wired into one peer group and starts
@@ -89,10 +92,10 @@ func newGroup(t *testing.T, n int) []*peer {
 	peers := make([]*peer, n)
 	for i := range n {
 		id := uint32(i + 1)
-		q := diem.NewQueue(256)
+		q := make(chan any, 256)
 		peers[i] = &peer{
 			tr: New(Config{
-				ID: id, Server: srvs[i], Sink: q.Push,
+				ID: id, Server: srvs[i], Sink: sink(q),
 				Verifier: diem.NewVerifier(signer(t, id, n), diem.QuorumSize(n)),
 			}),
 			q: q,
@@ -254,14 +257,13 @@ func TestVoteToUnknownReplicaIsDropped(t *testing.T) {
 }
 
 // TestHandlerRejectsMalformed drives the handler directly, with no server
-// involved. Each row is verifier-rejected, and each must
-// increment rejected without pushing anything. This is the test that shows the
-// transport boundary is the security boundary: stage B moved authentication
-// here so the consensus goroutine never runs a signature check.
+// involved. Each row is verifier-rejected, and each must increment rejected
+// without pushing anything. This is the test that shows the transport boundary
+// is the security boundary.
 func TestHandlerRejectsMalformed(t *testing.T) {
 	const n = 4
-	q := diem.NewQueue(8)
-	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: q.Push}
+	q := make(chan any, 8)
+	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: sink(q)}
 	proposal, vote, timeout := round1(t, 1, n)
 
 	forged := diempb.Signature_builder{Signer: 1, Sig: []byte("forged")}.Build()
@@ -321,8 +323,8 @@ func TestHandlerRejectsMalformed(t *testing.T) {
 // three messages, unmodified, must reach the sink.
 func TestHandlerAcceptsWellFormed(t *testing.T) {
 	const n = 4
-	q := diem.NewQueue(8)
-	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: q.Push}
+	q := make(chan any, 8)
+	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: sink(q)}
 	proposal, vote, timeout := round1(t, 1, n)
 
 	h.Proposal(gorums.ServerContext{}, proto.Clone(proposal).(*diempb.ProposalMsg))
@@ -466,10 +468,7 @@ func TestRequestBlockChecksTheID(t *testing.T) {
 }
 
 // TestOutboundQueueDrops never calls Start, so nothing drains the outbound
-// queue; sends must drop rather than block. Outbound drops are safe because
-// loss is what the round timer recovers from, while the inbound queue is
-// bounded and blocking for the opposite reason: an already-accepted input must
-// never be lost.
+// queue, and sends must drop rather than block.
 func TestOutboundQueueDrops(t *testing.T) {
 	const n = 1
 	tr := New(Config{
@@ -477,7 +476,7 @@ func TestOutboundQueueDrops(t *testing.T) {
 		// This replica's own ID resolves to an in-process node regardless of
 		// the address given, so the placeholder is never dialed.
 		Peers:    map[uint32]string{1: "127.0.0.1:0"},
-		Sink:     diem.NewQueue(8).Push,
+		Sink:     sink(make(chan any, 8)),
 		Verifier: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)),
 	})
 	t.Cleanup(tr.Stop)
@@ -508,7 +507,7 @@ func TestStopIdempotent(t *testing.T) {
 		return New(Config{
 			ID: 1, Listen: "127.0.0.1:0",
 			Peers:    map[uint32]string{1: "127.0.0.1:0"},
-			Sink:     diem.NewQueue(1).Push,
+			Sink:     sink(make(chan any, 1)),
 			Verifier: diem.NewVerifier(signer(t, 1, 1), diem.QuorumSize(1)),
 		})
 	}
@@ -535,21 +534,26 @@ const (
 )
 
 // node is one replica's full stack over the Gorums transport, plus the commit
-// log the test reads.
+// log the test reads. mu serializes every core call, as replica.Replica does,
+// and guards the log, which the ledger appends to inside those calls.
 type node struct {
 	id   uint32
 	tr   *Transport
-	q    diem.Queue
 	core *diem.Core
-	loop *diem.Loop
 
 	mu      sync.Mutex
+	stopped bool
 	commits []*diempb.Block
 }
 
-// log snapshots the commit log. MemLedger.OnCommit runs on the consensus
-// goroutine and the test reads from its own, which is the whole reason for the
-// mutex — it guards application state, never protocol state.
+func (n *node) deliver(m any) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.stopped {
+		n.core.Dispatch(m)
+	}
+}
+
 func (n *node) log() []*diempb.Block {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -557,9 +561,7 @@ func (n *node) log() []*diempb.Block {
 }
 
 // newCluster builds n replicas on one process's Gorums local servers, each with
-// a real ECDSA key. The wiring order is forced by the constructors: the queue
-// is the only dependency-free piece, so the transport and the core both hang
-// off it.
+// a real ECDSA key.
 func newCluster(t *testing.T, n int) []*node {
 	t.Helper()
 	srvs, stopSrvs, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(insecureDial))
@@ -583,14 +585,9 @@ func newCluster(t *testing.T, n int) []*node {
 		nd := &node{id: id}
 		signer := crypto.New(privs[id], pubs)
 		ledger := diem.NewMemLedger()
-		ledger.OnCommit = func(b *diempb.Block) {
-			nd.mu.Lock()
-			nd.commits = append(nd.commits, b)
-			nd.mu.Unlock()
-		}
-		nd.q = diem.NewQueue(1024)
+		ledger.OnCommit = func(b *diempb.Block) { nd.commits = append(nd.commits, b) }
 		nd.tr = New(Config{
-			ID: id, Server: srvs[i], Sink: nd.q.Push,
+			ID: id, Server: srvs[i], Sink: nd.deliver,
 			Verifier: diem.NewVerifier(signer, diem.QuorumSize(n)),
 		})
 		nd.core = diem.New(diem.Config{
@@ -601,62 +598,54 @@ func newCluster(t *testing.T, n int) []*node {
 			Transport:  nd.tr,
 			Clock:      diem.SystemClock{},
 			Backoff:    diem.NewBackoff(testRoundBase, testRoundMax, 2),
-			Sink:       nd.q.Push,
+			Lock:       &nd.mu,
 		})
-		nd.loop = diem.NewLoop(nd.core, nd.q)
 		nodes[i] = nd
 	}
 	return nodes
 }
 
-// run starts every node and returns the func that stops them all. Stopping is
-// the dance replica.Diem also has to do: cancel the loops, then keep the
-// inbound queues moving while the transports go down, because those queues are
-// bounded and blocking and Gorums never waits for its handler goroutines. It is
+// run starts every node and returns the func that stops them all. Each node's
+// mu is held until its core has started, so an early message waits for it.
+// Stopping marks every node stopped under its mu before the transports go
+// down, because Gorums never waits for its handler goroutines. It is
 // idempotent, so a test can both defer it and call it early to quiesce the
-// cluster before reading state that belongs to the loop goroutine.
+// cluster before reading core state.
 func run(t *testing.T, nodes []*node) func() {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	var loops sync.WaitGroup
 	for _, nd := range nodes {
+		nd.mu.Lock()
 		nd.tr.Start()
 	}
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer waitCancel()
 	for _, nd := range nodes {
 		if err := nd.tr.WaitForPeers(waitCtx); err != nil {
+			for _, nd := range nodes {
+				nd.stopped = true
+				nd.mu.Unlock()
+				nd.tr.Stop()
+			}
 			t.Fatalf("replica %d WaitForPeers: %v", nd.id, err)
 		}
 	}
 	for _, nd := range nodes {
 		nd.core.Start()
-		loops.Go(func() { _ = nd.loop.Run(ctx) })
+		nd.mu.Unlock()
 	}
 
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			cancel()
-			drained := make(chan struct{})
-			var drainers sync.WaitGroup
 			for _, nd := range nodes {
-				drainers.Go(func() {
-					for {
-						select {
-						case <-drained:
-							return
-						case <-nd.q:
-						}
-					}
-				})
+				nd.mu.Lock()
+				nd.stopped = true
+				nd.core.Stop()
+				nd.mu.Unlock()
 			}
 			for _, nd := range nodes {
 				nd.tr.Stop()
 			}
-			close(drained)
-			drainers.Wait()
-			loops.Wait()
 		})
 	}
 }
@@ -704,8 +693,7 @@ func TestClusterCommitsOverGorums(t *testing.T) {
 		t.Fatalf("commit depths %v, want every replica >= %d", depths(nodes), wantDepth)
 	}
 
-	// Quiesce before reading anything: a Core's state belongs to its loop
-	// goroutine and is not safe to read from here while the loop is running.
+	// Quiesce before reading anything, so the logs compared are final.
 	stop()
 
 	logs := make([][]*diempb.Block, n)
