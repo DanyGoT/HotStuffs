@@ -89,9 +89,9 @@ Terse restatement of what the DiemBFT proofs need. Code pointers are
 | TC validity | quorum of distinct signers, each over (round, own high_qc_round) | =verify.go:VerifyTC= |
 | Safety re-verifies | QC, TC and block id re-checked before signing; the author signature stays at the edge | =safety.go:validSignatures=, =validBlockID= |
 | one vote per signer/round | duplicate votes cannot reach a quorum | =blocktree.go:ProcessVote= |
-| proposer is leader | proposal round = current round, sender = author = leader | =core.go:processProposalMsg= |
-| vote to next leader | vote unicast to leader of r+1 | =core.go:processProposalMsg= |
-| leader extends high_qc | block built over highest QC, which absorbs every received timeout's high_qc; high_qc never lowers | =blocktree.go:GenerateBlock=, =ProcessQC=, =core.go:processTimeoutMsg=, =processNewRoundEvent= |
+| proposer is leader | proposal round = current round, sender = author = leader | =core.go:OnProposal= |
+| vote to next leader | vote unicast to leader of r+1 | =core.go:OnProposal= |
+| leader extends high_qc | block built over highest QC, which absorbs every received timeout's high_qc; high_qc never lowers | =blocktree.go:GenerateBlock=, =ProcessQC=, =core.go:OnTimeout=, =processNewRoundEvent= |
 | round entry | enter qc.round+1 / tc.round+1, never backwards | =pacemaker.go:AdvanceRoundQC=, =AdvanceRoundTC= |
 | Bracha amplification | f+1 timeouts for r => time out of r; quorum => TC; counted once per sender | =pacemaker.go:ProcessRemoteTimeout= |
 | round timer | paper: 4\Delta or \alpha+\beta commit_gap; code: capped backoff, grown on entering a round on a TC, reset on QC | =pacemaker.go:AdvanceRoundTC=, =AdvanceRoundQC=, =Backoff= |

@@ -9,7 +9,7 @@ import (
 
 // newLoopFixture is replica 1 of 4 driven through its own queue, so the sink
 // the round timer writes to is the queue the loop reads from.
-func newLoopFixture(t *testing.T, observe func(Event, State, time.Duration)) (*Loop, *recordNet) {
+func newLoopFixture(t *testing.T, observe func(State)) (*Loop, *recordNet) {
 	t.Helper()
 	q := NewQueue(8)
 	net := &recordNet{}
@@ -27,34 +27,29 @@ func newLoopFixture(t *testing.T, observe func(Event, State, time.Duration)) (*L
 	return NewLoop(core, q), net
 }
 
-func TestLoopTickProcessesOneEvent(t *testing.T) {
-	l, net := newLoopFixture(t, nil)
-	l.core.Start()
+func TestLoopTickProcessesOneInput(t *testing.T) {
+	l, _ := newLoopFixture(t, nil)
 
 	if l.Tick() {
 		t.Fatal("Tick() = true on an empty queue")
 	}
-	// Two events Core drops as stale, then the one it acts on.
-	epoch := l.core.pacemaker.Epoch()
-	l.Push(LocalTimeoutEvent{Epoch: epoch - 1})
-	l.Push(LocalTimeoutEvent{Epoch: epoch - 1})
-	l.Push(LocalTimeoutEvent{Epoch: epoch})
+	var ran []int
+	for i := range 3 {
+		l.Push(func(*Core) { ran = append(ran, i) })
+	}
 
-	for i := range 2 {
+	for i := range 3 {
 		if !l.Tick() {
-			t.Fatalf("Tick() = false with %d events still queued", 3-i)
+			t.Fatalf("Tick() = false with %d inputs still queued", 3-i)
 		}
-		if len(net.timeouts) != 0 {
-			t.Fatalf("a stale timer event produced %d timeouts, want 0", len(net.timeouts))
+		if len(ran) != i+1 || ran[i] != i {
+			t.Fatalf("after %d ticks ran %v, want the first %d in order", i+1, ran, i+1)
 		}
 	}
-	// step reads the queue after taking its event, so the deepest it ever saw
+	// step reads the queue after taking its input, so the deepest it ever saw
 	// was the two left behind the first one.
 	if got := l.QueueHighWater(); got != 2 {
 		t.Errorf("QueueHighWater() = %d, want 2", got)
-	}
-	if !l.Tick() || len(net.timeouts) != 1 {
-		t.Fatalf("the current-round timer event produced %d timeouts, want 1", len(net.timeouts))
 	}
 	if l.Tick() {
 		t.Error("Tick() = true on a drained queue")
@@ -62,18 +57,18 @@ func TestLoopTickProcessesOneEvent(t *testing.T) {
 }
 
 // TestLoopRunProcessesThenStops covers both arms of Run's select without a
-// goroutine: the observer cancels the context once the queued event has been
-// stepped, so the next pass takes the ctx.Done arm.
+// goroutine: the observer cancels the context once the queued input has run,
+// so the next pass takes the ctx.Done arm.
 func TestLoopRunProcessesThenStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	l, net := newLoopFixture(t, func(Event, State, time.Duration) { cancel() })
+	l, net := newLoopFixture(t, func(State) { cancel() })
 	l.core.Start()
-	l.Push(LocalTimeoutEvent{Epoch: l.core.pacemaker.Epoch()})
+	l.Push(func(c *Core) { c.pacemaker.LocalTimeoutRound() })
 
 	if err := l.Run(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run() = %v, want context.Canceled", err)
 	}
 	if len(net.timeouts) != 1 {
-		t.Errorf("Run processed %d timer events, want 1", len(net.timeouts))
+		t.Errorf("Run processed %d timeouts, want 1", len(net.timeouts))
 	}
 }

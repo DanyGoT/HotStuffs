@@ -45,15 +45,15 @@ func signer(t *testing.T, id uint32, n int) *crypto.Signer {
 	return crypto.New(ks.privs[id], ks.pubs)
 }
 
-// recv reads one event off q, failing the test after a generous timeout rather
+// recv reads one input off q, failing the test after a generous timeout rather
 // than blocking forever on a bug.
-func recv(t *testing.T, q diem.Queue) diem.Event {
+func recv(t *testing.T, q diem.Queue) any {
 	t.Helper()
 	select {
 	case e := <-q:
 		return e
 	case <-time.After(recvTimeout):
-		t.Fatal("timed out waiting for an event")
+		t.Fatal("timed out waiting for an input")
 		return nil
 	}
 }
@@ -186,12 +186,12 @@ func TestMulticastReachesAll(t *testing.T) {
 	t.Run("Proposal", func(t *testing.T) {
 		peers[0].tr.Proposal(proposal)
 		for i, p := range peers {
-			e, ok := recv(t, p.q).(diem.ProposalEvent)
+			m, ok := recv(t, p.q).(*diempb.ProposalMsg)
 			if !ok {
-				t.Fatalf("replica %d: got a non-proposal event", i+1)
+				t.Fatalf("replica %d: got a non-proposal input", i+1)
 			}
-			if !bytes.Equal(e.Msg.GetBlock().GetId(), proposal.GetBlock().GetId()) {
-				t.Errorf("replica %d: block id = %x, want %x", i+1, e.Msg.GetBlock().GetId(), proposal.GetBlock().GetId())
+			if !bytes.Equal(m.GetBlock().GetId(), proposal.GetBlock().GetId()) {
+				t.Errorf("replica %d: block id = %x, want %x", i+1, m.GetBlock().GetId(), proposal.GetBlock().GetId())
 			}
 		}
 	})
@@ -199,12 +199,12 @@ func TestMulticastReachesAll(t *testing.T) {
 	t.Run("Timeout", func(t *testing.T) {
 		peers[0].tr.Timeout(timeout)
 		for i, p := range peers {
-			e, ok := recv(t, p.q).(diem.TimeoutEvent)
+			m, ok := recv(t, p.q).(*diempb.TimeoutMsg)
 			if !ok {
-				t.Fatalf("replica %d: got a non-timeout event", i+1)
+				t.Fatalf("replica %d: got a non-timeout input", i+1)
 			}
-			if e.Msg.GetTmoInfo().GetRound() != 1 || e.Msg.GetTmoInfo().GetSender() != 1 {
-				t.Errorf("replica %d: tmo info = %+v, want round 1 from sender 1", i+1, e.Msg.GetTmoInfo())
+			if m.GetTmoInfo().GetRound() != 1 || m.GetTmoInfo().GetSender() != 1 {
+				t.Errorf("replica %d: tmo info = %+v, want round 1 from sender 1", i+1, m.GetTmoInfo())
 			}
 		}
 	})
@@ -219,12 +219,12 @@ func TestVoteIsUnicast(t *testing.T) {
 
 	peers[0].tr.Vote(vote, to)
 
-	e, ok := recv(t, peers[to-1].q).(diem.VoteEvent)
+	m, ok := recv(t, peers[to-1].q).(*diempb.VoteMsg)
 	if !ok {
-		t.Fatalf("replica %d: got a non-vote event", to)
+		t.Fatalf("replica %d: got a non-vote input", to)
 	}
-	if e.Msg.GetSender() != vote.GetSender() || !bytes.Equal(e.Msg.GetVoteInfo().GetId(), vote.GetVoteInfo().GetId()) {
-		t.Errorf("vote = %+v, want sender %d on block %x", e.Msg, vote.GetSender(), vote.GetVoteInfo().GetId())
+	if m.GetSender() != vote.GetSender() || !bytes.Equal(m.GetVoteInfo().GetId(), vote.GetVoteInfo().GetId()) {
+		t.Errorf("vote = %+v, want sender %d on block %x", m, vote.GetSender(), vote.GetVoteInfo().GetId())
 	}
 	// A multicast would already have delivered to the others by now, since the
 	// addressee's copy travels the same sender goroutine and the same queue.
@@ -255,7 +255,7 @@ func TestVoteToUnknownReplicaIsDropped(t *testing.T) {
 
 // TestHandlerRejectsMalformed drives the handler directly, with no server
 // involved. Each row is verifier-rejected, and each must
-// increment rejected without pushing an event. This is the test that shows the
+// increment rejected without pushing anything. This is the test that shows the
 // transport boundary is the security boundary: stage B moved authentication
 // here so the consensus goroutine never runs a signature check.
 func TestHandlerRejectsMalformed(t *testing.T) {
@@ -333,19 +333,19 @@ func TestHandlerAcceptsWellFormed(t *testing.T) {
 		t.Fatalf("rejected = %d, want 0", got)
 	}
 	for _, want := range []string{"proposal", "vote", "timeout"} {
-		switch e := recv(t, q).(type) {
-		case diem.ProposalEvent:
+		switch m := recv(t, q).(type) {
+		case *diempb.ProposalMsg:
 			if want != "proposal" {
 				t.Errorf("got a proposal, want a %s", want)
 			}
-			if !bytes.Equal(e.Msg.GetBlock().GetId(), proposal.GetBlock().GetId()) {
-				t.Errorf("block id = %x, want %x", e.Msg.GetBlock().GetId(), proposal.GetBlock().GetId())
+			if !bytes.Equal(m.GetBlock().GetId(), proposal.GetBlock().GetId()) {
+				t.Errorf("block id = %x, want %x", m.GetBlock().GetId(), proposal.GetBlock().GetId())
 			}
-		case diem.VoteEvent:
+		case *diempb.VoteMsg:
 			if want != "vote" {
 				t.Errorf("got a vote, want a %s", want)
 			}
-		case diem.TimeoutEvent:
+		case *diempb.TimeoutMsg:
 			if want != "timeout" {
 				t.Errorf("got a timeout, want a %s", want)
 			}
@@ -353,10 +353,38 @@ func TestHandlerAcceptsWellFormed(t *testing.T) {
 	}
 }
 
-// answer replies to every block request p receives with b, and keeps whatever
-// else arrives. The func it returns stops it and hands back what it kept.
-func answer(p *peer, b *diempb.Block) func() []diem.Event {
-	var kept []diem.Event
+// holding is an unstarted core whose pending tree holds b, if b is not nil, so
+// that Block(b's id) answers with b whatever b's content.
+func holding(t *testing.T, b *diempb.Block) *diem.Core {
+	t.Helper()
+	c := diem.New(diem.Config{
+		ID:         1,
+		Validators: []uint32{1, 2, 3, 4},
+		Ledger:     diem.NewMemLedger(),
+		Crypto:     signer(t, 1, 4),
+		Transport:  nopNet{},
+		Clock:      diem.SystemClock{},
+		Backoff:    diem.NewBackoff(time.Second, time.Second, 2),
+	})
+	if b != nil {
+		c.OnBlock(b)
+	}
+	return c
+}
+
+type nopNet struct{}
+
+func (nopNet) Proposal(*diempb.ProposalMsg) {}
+func (nopNet) Vote(*diempb.VoteMsg, uint32) {}
+func (nopNet) Timeout(*diempb.TimeoutMsg)   {}
+func (nopNet) RequestBlock([]byte)          {}
+
+// answer runs every block request p receives against a core holding b, and
+// keeps whatever else arrives. The func it returns stops it and hands back what
+// it kept.
+func answer(t *testing.T, p *peer, b *diempb.Block) func() []any {
+	core := holding(t, b)
+	var kept []any
 	done, exited := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(exited)
@@ -364,22 +392,22 @@ func answer(p *peer, b *diempb.Block) func() []diem.Event {
 			select {
 			case <-done:
 				return
-			case e := <-p.q:
-				if r, ok := e.(diem.BlockRequestEvent); ok {
-					r.Reply <- b
+			case m := <-p.q:
+				if f, ok := m.(func(*diem.Core)); ok {
+					f(core)
 				} else {
-					kept = append(kept, e)
+					kept = append(kept, m)
 				}
 			}
 		}
 	}()
-	return func() []diem.Event {
+	return func() []any {
 		close(done)
 		<-exited
 		for {
 			select {
-			case e := <-p.q:
-				kept = append(kept, e)
+			case m := <-p.q:
+				kept = append(kept, m)
 			default:
 				return kept
 			}
@@ -412,25 +440,25 @@ func TestRequestBlockChecksTheID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			peers := newGroup(t, n)
 			for i, b := range []*diempb.Block{forged, nil, tc.held} {
-				stop := answer(peers[i+1], b)
+				stop := answer(t, peers[i+1], b)
 				t.Cleanup(func() { stop() })
 			}
-			self := answer(peers[0], nil)
+			self := answer(t, peers[0], nil)
 
 			peers[0].tr.fetch(peers[0].tr.peers(), want.GetId())
 			got := self()
 
 			if tc.held == nil {
 				if len(got) != 0 {
-					t.Fatalf("got %d events from a fetch no correct peer answered, want none", len(got))
+					t.Fatalf("got %d inputs from a fetch no correct peer answered, want none", len(got))
 				}
 				return
 			}
 			if len(got) != 1 {
-				t.Fatalf("got %d events, want the one block", len(got))
+				t.Fatalf("got %d inputs, want the one block", len(got))
 			}
-			e, ok := got[0].(diem.BlockEvent)
-			if !ok || !proto.Equal(e.Block, want) {
+			b, ok := got[0].(*diempb.Block)
+			if !ok || !proto.Equal(b, want) {
 				t.Fatalf("got %+v, want the requested block", got[0])
 			}
 		})
@@ -440,7 +468,7 @@ func TestRequestBlockChecksTheID(t *testing.T) {
 // TestOutboundQueueDrops never calls Start, so nothing drains the outbound
 // queue; sends must drop rather than block. Outbound drops are safe because
 // loss is what the round timer recovers from, while the inbound queue is
-// bounded and blocking for the opposite reason: an already-accepted event must
+// bounded and blocking for the opposite reason: an already-accepted input must
 // never be lost.
 func TestOutboundQueueDrops(t *testing.T) {
 	const n = 1
