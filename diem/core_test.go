@@ -18,12 +18,12 @@ type coreFixture struct {
 	core   *Core
 	ledger *MemLedger
 	net    *recordNet
-	events *[]Event
+	fired  *[]func(*Core)
 }
 
 func newCoreFixture(t *testing.T) *coreFixture {
 	t.Helper()
-	f := &coreFixture{ledger: NewMemLedger(), net: &recordNet{}, events: new([]Event)}
+	f := &coreFixture{ledger: NewMemLedger(), net: &recordNet{}, fired: new([]func(*Core))}
 	ids := []uint32{1, 2, 3, 4}
 	f.core = New(Config{
 		ID:           2,
@@ -34,7 +34,7 @@ func newCoreFixture(t *testing.T) *coreFixture {
 		Transport:    f.net,
 		Clock:        newFakeClock(),
 		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
-		Sink:         recordSink(f.events),
+		Sink:         recordSink(f.fired),
 	})
 	f.core.Start()
 	if got := f.core.State().Round; got != 1 {
@@ -59,7 +59,7 @@ func proposal(from uint32, author uint32, round uint64) *diempb.ProposalMsg {
 
 func TestCoreVotesForValidProposal(t *testing.T) {
 	f := newCoreFixture(t)
-	f.core.Step(ProposalEvent{Msg: proposal(1, 1, 1)})
+	f.core.OnProposal(proposal(1, 1, 1))
 
 	if len(f.net.votes) != 1 {
 		t.Fatalf("sent %d votes for a valid proposal, want 1", len(f.net.votes))
@@ -93,7 +93,7 @@ func TestCoreRejectsProposals(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newCoreFixture(t)
-			f.core.Step(ProposalEvent{Msg: tc.msg()})
+			f.core.OnProposal(tc.msg())
 			if len(f.net.votes) != 0 {
 				t.Fatalf("voted for a proposal that should have been dropped")
 			}
@@ -121,10 +121,10 @@ func voteFor(t *testing.T, from uint32, b *diempb.Block) *diempb.VoteMsg {
 func TestCoreFormsQCFromQuorum(t *testing.T) {
 	f := newCoreFixture(t)
 	p := proposal(1, 1, 1)
-	f.core.Step(ProposalEvent{Msg: p})
+	f.core.OnProposal(p)
 
 	for _, from := range []uint32{1, 3, 4} {
-		f.core.Step(VoteEvent{Msg: voteFor(t, from, p.GetBlock())})
+		f.core.OnVote(voteFor(t, from, p.GetBlock()))
 	}
 	if got := f.core.State().Round; got != 2 {
 		t.Fatalf("round %d after a quorum of votes, want 2", got)
@@ -140,10 +140,10 @@ func TestCoreFormsQCFromQuorum(t *testing.T) {
 func TestCoreProposesOncePerRound(t *testing.T) {
 	f := newCoreFixture(t)
 	p := proposal(1, 1, 1)
-	f.core.Step(ProposalEvent{Msg: p})
+	f.core.OnProposal(p)
 
 	for _, from := range []uint32{1, 3, 4} {
-		f.core.Step(TimeoutEvent{Msg: timeoutFrom(t, from)})
+		f.core.OnTimeout(timeoutFrom(t, from))
 	}
 	if got := f.core.State().Round; got != 2 {
 		t.Fatalf("setup: round %d after a TC for round 1, want 2", got)
@@ -153,7 +153,7 @@ func TestCoreProposesOncePerRound(t *testing.T) {
 	}
 
 	for _, from := range []uint32{1, 3, 4} {
-		f.core.Step(VoteEvent{Msg: voteFor(t, from, p.GetBlock())})
+		f.core.OnVote(voteFor(t, from, p.GetBlock()))
 	}
 	if got := f.core.State().HighQCRound; got != 1 {
 		t.Fatalf("setup: high QC round %d after the late votes, want 1", got)
@@ -181,7 +181,7 @@ func timeoutFrom(t *testing.T, from uint32) *diempb.TimeoutMsg {
 func TestCoreAmplifiesTimeouts(t *testing.T) {
 	f := newCoreFixture(t)
 	for _, from := range []uint32{1, 3} { // f+1 = 2 distinct senders
-		f.core.Step(TimeoutEvent{Msg: timeoutFrom(t, from)})
+		f.core.OnTimeout(timeoutFrom(t, from))
 	}
 	if len(f.net.timeouts) != 1 {
 		t.Fatalf("broadcast %d timeouts after f+1 remote ones, want 1", len(f.net.timeouts))
@@ -193,44 +193,58 @@ func TestCoreAmplifiesTimeouts(t *testing.T) {
 // give up on the round it is in now.
 func TestCoreIgnoresStaleTimer(t *testing.T) {
 	f := newCoreFixture(t)
-	epoch := f.core.pacemaker.Epoch()
-	f.core.Step(LocalTimeoutEvent{Epoch: epoch - 1})
-	if len(f.net.timeouts) != 0 {
-		t.Fatal("timed out on a stale timer event")
+	clock := f.core.pacemaker.clock.(*fakeClock)
+	clock.Advance(100 * time.Millisecond)
+	if len(*f.fired) != 1 {
+		t.Fatalf("setup: the round-1 timer pushed %d callbacks, want 1", len(*f.fired))
 	}
-	f.core.Step(LocalTimeoutEvent{Epoch: epoch})
-	if len(f.net.timeouts) != 1 {
-		t.Fatalf("broadcast %d timeouts for the armed timer, want 1", len(f.net.timeouts))
+	stale := (*f.fired)[0]
+
+	for _, from := range []uint32{1, 3, 4} { // a quorum: round 2 on a TC
+		f.core.OnTimeout(timeoutFrom(t, from))
+	}
+	if got := f.core.State().Round; got != 2 {
+		t.Fatalf("setup: in round %d, want 2", got)
+	}
+	sent := len(f.net.timeouts)
+	stale(f.core)
+	if len(f.net.timeouts) != sent {
+		t.Fatal("timed out on a stale timer callback")
+	}
+	clock.Advance(time.Second)
+	(*f.fired)[len(*f.fired)-1](f.core)
+	if len(f.net.timeouts) != sent+1 {
+		t.Fatalf("broadcast %d timeouts for the armed timer, want 1", len(f.net.timeouts)-sent)
 	}
 }
 
-// TestCoreIgnoresTimerRearmedInSameRound is the stale event the round cannot
+// TestCoreIgnoresTimerRearmedInSameRound is the stale callback the round cannot
 // tell apart: the timer fires, then f+1 remote timeouts re-arm the same round
-// before the queued event is stepped.
+// before the queued callback runs.
 func TestCoreIgnoresTimerRearmedInSameRound(t *testing.T) {
 	f := newCoreFixture(t)
-	f.core.clock.(*fakeClock).Advance(100 * time.Millisecond)
-	if len(*f.events) != 1 {
-		t.Fatalf("setup: the round-1 timer pushed %d events, want 1", len(*f.events))
+	f.core.pacemaker.clock.(*fakeClock).Advance(100 * time.Millisecond)
+	if len(*f.fired) != 1 {
+		t.Fatalf("setup: the round-1 timer pushed %d callbacks, want 1", len(*f.fired))
 	}
-	stale := (*f.events)[0]
+	stale := (*f.fired)[0]
 
 	for _, from := range []uint32{1, 3} { // f+1 = 2 distinct senders
-		f.core.Step(TimeoutEvent{Msg: timeoutFrom(t, from)})
+		f.core.OnTimeout(timeoutFrom(t, from))
 	}
 	if len(f.net.timeouts) != 1 {
 		t.Fatalf("setup: broadcast %d timeouts after f+1 remote ones, want 1", len(f.net.timeouts))
 	}
 
-	f.core.Step(stale)
+	stale(f.core)
 	if len(f.net.timeouts) != 1 {
-		t.Fatalf("broadcast %d timeouts after a disarmed timer's event, want 1", len(f.net.timeouts))
+		t.Fatalf("broadcast %d timeouts after a disarmed timer's callback, want 1", len(f.net.timeouts))
 	}
 }
 
 func TestCoreStopDisarmsTimer(t *testing.T) {
 	clock := newFakeClock()
-	var events []Event
+	var fired []func(*Core)
 	core := New(Config{
 		ID:           1,
 		Validators:   []uint32{1, 2, 3, 4},
@@ -240,26 +254,13 @@ func TestCoreStopDisarmsTimer(t *testing.T) {
 		Transport:    &recordNet{},
 		Clock:        clock,
 		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
-		Sink:         recordSink(&events),
+		Sink:         recordSink(&fired),
 	})
 	core.Start()
 	core.Stop()
 	clock.Advance(time.Second)
-	if len(events) != 0 {
-		t.Fatalf("a stopped core pushed %d timer events", len(events))
-	}
-}
-
-func TestQueueDeliversEvents(t *testing.T) {
-	q := NewQueue(2)
-	q.Push(LocalTimeoutEvent{Epoch: 3})
-	e, ok := <-q
-	if !ok {
-		t.Fatal("queue closed")
-	}
-	lt, ok := e.(LocalTimeoutEvent)
-	if !ok || lt.Epoch != 3 {
-		t.Fatalf("received %#v, want LocalTimeoutEvent for epoch 3", e)
+	if len(fired) != 0 {
+		t.Fatalf("a stopped core pushed %d timer callbacks", len(fired))
 	}
 }
 
@@ -292,7 +293,7 @@ func TestCoreBoundsVoteAccumulation(t *testing.T) {
 		if !v.VerifyVote(m) {
 			t.Fatalf("setup: the fabricated vote for round %d must pass the edge", r)
 		}
-		f.core.Step(VoteEvent{Msg: m})
+		f.core.OnVote(m)
 	}
 	if got := f.core.State().Round; got != 1 {
 		t.Fatalf("round moved to %d on votes that can never form a quorum", got)
@@ -311,12 +312,12 @@ func TestCoreDropsVotesForPastRounds(t *testing.T) {
 		t.Fatalf("setup: round %d, want 10", got)
 	}
 	for r := uint64(1); r <= 8; r++ {
-		f.core.Step(VoteEvent{Msg: fabricatedVote(1, r)})
+		f.core.OnVote(fabricatedVote(1, r))
 	}
 	if got := len(f.core.tree.votes); got != 0 {
 		t.Fatalf("%d vote buckets for rounds below the previous one, want 0", got)
 	}
-	f.core.Step(VoteEvent{Msg: fabricatedVote(1, 9)})
+	f.core.OnVote(fabricatedVote(1, 9))
 	if got := len(f.core.tree.votes); got != 1 {
 		t.Fatalf("%d vote buckets after a vote for the previous round, want 1", got)
 	}
@@ -341,12 +342,12 @@ func TestCoreIgnoresForgedGenesisCommit(t *testing.T) {
 	f := newCoreFixture(t)
 	v := NewVerifier(newTestSigner(testN), testQuorum)
 	p := proposal(1, 1, 1)
-	f.core.Step(ProposalEvent{Msg: p})
+	f.core.OnProposal(p)
 
 	m := timeoutFrom(t, 3)
 	m.SetHighCommitQc(forgedGenesisQC(p.GetBlock().GetId()))
 	if v.VerifyTimeout(m) {
-		f.core.Step(TimeoutEvent{Msg: m})
+		f.core.OnTimeout(m)
 	}
 	if _, ok := f.ledger.CommittedBlock(p.GetBlock().GetId()); ok {
 		t.Fatal("committed the round-1 block on a forged genesis certificate")

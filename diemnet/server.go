@@ -27,7 +27,7 @@ import (
 // until it has fetched the parent.
 type handler struct {
 	ver  *diem.Verifier
-	sink func(diem.Event)
+	sink func(any)
 
 	rejected atomic.Uint64
 }
@@ -39,7 +39,7 @@ func (h *handler) Proposal(_ gorums.ServerContext, in *diempb.ProposalMsg) {
 		h.rejected.Add(1)
 		return
 	}
-	h.sink(diem.ProposalEvent{Msg: in})
+	h.sink(in)
 }
 
 func (h *handler) Vote(_ gorums.ServerContext, in *diempb.VoteMsg) {
@@ -47,7 +47,7 @@ func (h *handler) Vote(_ gorums.ServerContext, in *diempb.VoteMsg) {
 		h.rejected.Add(1)
 		return
 	}
-	h.sink(diem.VoteEvent{Msg: in})
+	h.sink(in)
 }
 
 func (h *handler) Timeout(_ gorums.ServerContext, in *diempb.TimeoutMsg) {
@@ -55,7 +55,7 @@ func (h *handler) Timeout(_ gorums.ServerContext, in *diempb.TimeoutMsg) {
 		h.rejected.Add(1)
 		return
 	}
-	h.sink(diem.TimeoutEvent{Msg: in})
+	h.sink(in)
 }
 
 var errNoBlock = errors.New("diemnet: block not held")
@@ -65,7 +65,7 @@ var errNoBlock = errors.New("diemnet: block not held")
 // hold up this sender's later messages, and FIFO into the queue is kept.
 func (h *handler) RequestBlock(ctx gorums.ServerContext, in *diempb.BlockHash) (*diempb.Block, error) {
 	reply := make(chan *diempb.Block, 1)
-	h.sink(diem.BlockRequestEvent{ID: in.GetId(), Reply: reply})
+	h.sink(func(c *diem.Core) { reply <- c.Block(in.GetId()) })
 	ctx.Release()
 	select {
 	case b := <-reply:

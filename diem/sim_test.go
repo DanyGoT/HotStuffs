@@ -28,7 +28,7 @@ type sim struct {
 
 	// tamper, if set, stands between a sender and the network: it turns one
 	// message for one replica into whatever that replica receives instead.
-	tamper func(to uint32, e Event) []Event
+	tamper func(to uint32, m any) []any
 	// invalid is how many tampered messages the test built to fail edge
 	// verification; exactly that many must be rejected.
 	invalid int
@@ -74,38 +74,38 @@ func newSim(t *testing.T, n int, down ...uint32) *sim {
 			Transport:    &simNet{s: s, id: id},
 			Clock:        s.clock,
 			Backoff:      NewBackoff(simRoundBase, simRoundMax, 2),
-			Sink:         func(e Event) { s.deliver(id, e) },
+			Sink:         func(m any) { s.queue = append(s.queue, func() { dispatch(s.cores[id], m) }) },
 		})
 	}
 	return s
 }
 
-// deliver queues a step on one replica, but only for a message that passes that
+// deliver queues a message for one replica, but only one that passes that
 // replica's edge verification: the harness stands in for the network handler
 // goroutine, which is where authentication happens. A replica that is down
 // receives nothing, which is how a crash fault is modelled.
-func (s *sim) deliver(to uint32, e Event) {
+func (s *sim) deliver(to uint32, m any) {
 	if s.down[to] {
 		return
 	}
-	if !s.verify(to, e) {
+	if !s.verify(to, m) {
 		s.rejected++
 		return
 	}
-	s.queue = append(s.queue, func() { s.cores[to].Step(e) })
+	s.queue = append(s.queue, func() { dispatch(s.cores[to], m) })
 }
 
-func (s *sim) verify(to uint32, e Event) bool {
+func (s *sim) verify(to uint32, m any) bool {
 	v := s.vers[to]
-	switch e := e.(type) {
-	case ProposalEvent:
-		return v.VerifyProposal(e.Msg)
-	case VoteEvent:
-		return v.VerifyVote(e.Msg)
-	case TimeoutEvent:
-		return v.VerifyTimeout(e.Msg)
+	switch m := m.(type) {
+	case *diempb.ProposalMsg:
+		return v.VerifyProposal(m)
+	case *diempb.VoteMsg:
+		return v.VerifyVote(m)
+	case *diempb.TimeoutMsg:
+		return v.VerifyTimeout(m)
 	}
-	return true // LocalTimeoutEvent is this replica's own timer, not a message
+	return true // a fetched block, checked against its id by RequestBlock
 }
 
 // checkRejections is the point of counting. Apart from what the test forged on
@@ -119,19 +119,19 @@ func (s *sim) checkRejections() {
 }
 
 // send is the network: what a replica sends passes through tamper on its way.
-func (s *sim) send(to uint32, e Event) {
+func (s *sim) send(to uint32, m any) {
 	if s.tamper == nil {
-		s.deliver(to, e)
+		s.deliver(to, m)
 		return
 	}
-	for _, e := range s.tamper(to, e) {
-		s.deliver(to, e)
+	for _, m := range s.tamper(to, m) {
+		s.deliver(to, m)
 	}
 }
 
-func (s *sim) broadcast(e Event) {
+func (s *sim) broadcast(m any) {
 	for _, id := range s.ids {
-		s.send(id, e)
+		s.send(id, m)
 	}
 }
 
@@ -163,9 +163,9 @@ type simNet struct {
 	id uint32
 }
 
-func (n *simNet) Proposal(p *diempb.ProposalMsg)    { n.s.broadcast(ProposalEvent{Msg: p}) }
-func (n *simNet) Vote(v *diempb.VoteMsg, to uint32) { n.s.send(to, VoteEvent{Msg: v}) }
-func (n *simNet) Timeout(m *diempb.TimeoutMsg)      { n.s.broadcast(TimeoutEvent{Msg: m}) }
+func (n *simNet) Proposal(p *diempb.ProposalMsg)    { n.s.broadcast(p) }
+func (n *simNet) Vote(v *diempb.VoteMsg, to uint32) { n.s.send(to, v) }
+func (n *simNet) Timeout(m *diempb.TimeoutMsg)      { n.s.broadcast(m) }
 
 // RequestBlock asks the live replicas in turn, as one queued step, and delivers
 // the first block that passes the requester's check: the quorum call of
@@ -173,10 +173,8 @@ func (n *simNet) Timeout(m *diempb.TimeoutMsg)      { n.s.broadcast(TimeoutEvent
 func (n *simNet) RequestBlock(id []byte) {
 	n.s.queue = append(n.s.queue, func() {
 		for _, peer := range n.s.live() {
-			reply := make(chan *diempb.Block, 1)
-			n.s.cores[peer].Step(BlockRequestEvent{ID: id, Reply: reply})
-			if b := <-reply; n.s.vers[n.id].VerifyBlock(b, id) {
-				n.s.deliver(n.id, BlockEvent{Block: b})
+			if b := n.s.cores[peer].Block(id); n.s.vers[n.id].VerifyBlock(b, id) {
+				n.s.deliver(n.id, b)
 				return
 			}
 		}
@@ -341,7 +339,7 @@ func TestDuplicateTimeoutDoesNotRetrigger(t *testing.T) {
 	safety := NewSafety(1, NewVerifier(signer, quorum), signer, ledger, tree)
 	net := &dupNet{}
 	pm := NewPacemaker(quorum, faulty, newFakeClock(),
-		NewBackoff(simRoundBase, simRoundMax, 2), func(Event) {}, net, safety, tree)
+		NewBackoff(simRoundBase, simRoundMax, 2), func(any) {}, net, safety, tree)
 	pm.AdvanceRoundQC(genesisQC) // round 1
 
 	timeout := func(from uint32) *diempb.TimeoutMsg {
@@ -405,17 +403,17 @@ func TestEquivocatingLeaderIsSafe(t *testing.T) {
 	const n = 4
 	s := newSim(t, n)
 	forked := map[uint64]bool{}
-	s.tamper = func(to uint32, e Event) []Event {
-		p, ok := e.(ProposalEvent)
-		if !ok || p.Msg.GetSender() != 1 {
-			return []Event{e}
+	s.tamper = func(to uint32, m any) []any {
+		p, ok := m.(*diempb.ProposalMsg)
+		if !ok || p.GetSender() != 1 {
+			return []any{m}
 		}
-		forked[p.Msg.GetBlock().GetRound()] = true
-		twin := ProposalEvent{Msg: equivocate(t, n, p.Msg)}
+		forked[p.GetBlock().GetRound()] = true
+		twin := equivocate(t, n, p)
 		if to <= 2 {
-			return []Event{e, twin}
+			return []any{m, twin}
 		}
-		return []Event{twin, e}
+		return []any{twin, m}
 	}
 	s.run(4000)
 
@@ -434,12 +432,12 @@ func TestEquivocatingLeaderIsSafe(t *testing.T) {
 
 // proposalTo is a tamper that hands every message through, except the proposal
 // for round to replica to, which goes to f.
-func proposalTo(to uint32, round uint64, f func(Event) []Event) func(uint32, Event) []Event {
-	return func(id uint32, e Event) []Event {
-		if p, ok := e.(ProposalEvent); ok && id == to && p.Msg.GetBlock().GetRound() == round {
-			return f(e)
+func proposalTo(to uint32, round uint64, f func(any) []any) func(uint32, any) []any {
+	return func(id uint32, m any) []any {
+		if p, ok := m.(*diempb.ProposalMsg); ok && id == to && p.GetBlock().GetRound() == round {
+			return f(m)
 		}
-		return []Event{e}
+		return []any{m}
 	}
 }
 
@@ -451,14 +449,14 @@ func TestDroppedProposalsRecover(t *testing.T) {
 		t.Run(fmt.Sprint(gap), func(t *testing.T) {
 			s := newSim(t, 4)
 			dropped := 0
-			s.tamper = func(to uint32, e Event) []Event {
-				if p, ok := e.(ProposalEvent); ok && to == 4 {
-					if r := p.Msg.GetBlock().GetRound(); r >= 3 && r < 3+gap {
+			s.tamper = func(to uint32, m any) []any {
+				if p, ok := m.(*diempb.ProposalMsg); ok && to == 4 {
+					if r := p.GetBlock().GetRound(); r >= 3 && r < 3+gap {
 						dropped++
 						return nil
 					}
 				}
-				return []Event{e}
+				return []any{m}
 			}
 			s.run(4000 + 40*int(gap))
 
@@ -477,13 +475,13 @@ func TestDroppedProposalsRecover(t *testing.T) {
 // 3. As with a lost proposal, it must fetch the block and keep committing.
 func TestReorderedProposalsRecover(t *testing.T) {
 	s := newSim(t, 4)
-	var held Event
-	hold := proposalTo(4, 3, func(e Event) []Event { held = e; return nil })
-	s.tamper = func(to uint32, e Event) []Event {
-		if p, ok := e.(ProposalEvent); ok && to == 4 && p.Msg.GetBlock().GetRound() == 4 && held != nil {
-			return []Event{e, held}
+	var held any
+	hold := proposalTo(4, 3, func(m any) []any { held = m; return nil })
+	s.tamper = func(to uint32, m any) []any {
+		if p, ok := m.(*diempb.ProposalMsg); ok && to == 4 && p.GetBlock().GetRound() == 4 && held != nil {
+			return []any{m, held}
 		}
-		return hold(to, e)
+		return hold(to, m)
 	}
 	s.run(4000)
 

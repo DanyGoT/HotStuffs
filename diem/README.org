@@ -14,7 +14,7 @@ One file per module of the paper's section 3.
 
 #+begin_example
 diem/
-  core.go          3.1 Main — the event loop; the whole surface is one switch
+  core.go          3.1 Main — one method per input
   ledger.go        3.2 Ledger — speculative execution over a branching state
   blocktree.go     3.3 Block-tree — pending blocks, vote buckets, QC formation
   safety.go        3.4 Safety — the voting rules and the only key holder
@@ -22,8 +22,8 @@ diem/
   mempool.go       3.6 MemPool — where a leader's payload comes from
   leader.go        3.7 LeaderElection — round-robin and the reputation scheme
   verify.go        everything checked before a message is let into the loop
-  events.go        the sealed event set and the bounded Queue
-  loop.go          the event loop driver — Run, Tick, Step over the queue
+  loop.go          the bounded Queue and its driver — Run, Tick, and the one
+                   switch over the diempb types
   types.go         NewBlock and the small helpers over the diempb messages:
                    QCRound, Commits, MaxHighQCRound, well-formedness
   seams.go         Transport, Crypto and Clock: what the core plugs into
@@ -50,8 +50,8 @@ replica/replica.go wires Core + Loop + Transport; owns the lifecycle
 The algorithm is the =Safety= module plus the commit rule; everything else is
 plumbing around them.
 
-- The whole protocol surface — =core.go:Step=, one switch over a sealed event
-  set, so the cases are exhaustive
+- The whole protocol surface — =core.go:OnProposal=, =OnVote=, =OnTimeout=
+  and =OnBlock=, one method per input
 - Voting rules — =safety.go:safeToVote= and =safeToTimeout=, both resting on
   =consecutive=
 - Commit rule — =safety.go:commitStateIDCandidate=: a block whose round

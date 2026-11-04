@@ -27,7 +27,7 @@ type Config struct {
 	ID       uint32
 	Peers    map[uint32]string // every replica's address, this one included
 	Listen   string            // ":0" picks a free port; read it back with Addr
-	Sink     func(diem.Event)  // where verified inbound events go
+	Sink     func(any)         // where verified inputs go: diem.Queue.Push
 	Verifier *diem.Verifier
 
 	OutQueue      int // outbound queue depth; 0 picks a default
@@ -60,7 +60,7 @@ func (a peerAddr) Addr() string { return string(a) }
 //
 // Outbound is bounded and dropping; inbound is bounded and blocking. The
 // asymmetry is deliberate: a dropped outbound message is what the round timer
-// recovers from, while dropping an event the replica has already accepted is
+// recovers from, while dropping an input the replica has already accepted is
 // not recoverable.
 //
 // RequestBlock is the one call with a reply, and an addition: DiemBFT §3
@@ -93,7 +93,7 @@ func New(cfg Config) *Transport {
 	// GORUMS, in its favour: WithPeers makes this replica's own ID an in-process
 	// local node, so the paper's "broadcast to all replicas, including u itself"
 	// works literally. A leader's own proposal returns as a normal inbound
-	// event, which is what lets Core treat every message the same way whoever
+	// message, which is what lets Core treat every message the same way whoever
 	// sent it.
 	srv := cfg.Server
 	if srv == nil {
@@ -193,7 +193,7 @@ func (t *Transport) fetch(cfg gorums.Config, id []byte) {
 	req := diempb.BlockHash_builder{Id: id}.Build()
 	for r := range diempb.RequestBlock(cfg.Context(ctx), req).Results().IgnoreErrors() {
 		if t.handler.ver.VerifyBlock(r.Value, id) {
-			t.handler.sink(diem.BlockEvent{Block: r.Value})
+			t.handler.sink(r.Value)
 			return
 		}
 	}

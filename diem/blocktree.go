@@ -68,7 +68,7 @@ func (t *BlockTree) HighQC() *diempb.QuorumCert { return t.highQC }
 func (t *BlockTree) HighCommitQC() *diempb.QuorumCert { return t.highCommitQC }
 
 // Block returns a pending block by id. The paper's pending_block_tree (3.3) is
-// read only by prune; here it is also what Core.serveBlock answers a peer's
+// read only by prune; here it is also what Core.Block answers a peer's
 // block request from.
 func (t *BlockTree) Block(id []byte) (*diempb.Block, bool) {
 	b, ok := t.pending[string(id)]
