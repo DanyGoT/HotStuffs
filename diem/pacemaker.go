@@ -3,6 +3,7 @@ package diem
 import (
 	"cmp"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
@@ -18,7 +19,7 @@ type Pacemaker struct {
 
 	clock  Clock
 	dur    *Backoff
-	sink   func(any)
+	lock   sync.Locker
 	net    Transport
 	safety *Safety
 	tree   *BlockTree
@@ -39,13 +40,13 @@ type timeoutBucket struct {
 
 // NewPacemaker returns a pacemaker at round 0 with no timer armed. Start on
 // Core does the first advance.
-func NewPacemaker(quorum, faulty int, clock Clock, dur *Backoff, sink func(any), net Transport, safety *Safety, tree *BlockTree) *Pacemaker {
+func NewPacemaker(quorum, faulty int, clock Clock, dur *Backoff, lock sync.Locker, net Transport, safety *Safety, tree *BlockTree) *Pacemaker {
 	return &Pacemaker{
 		quorum:          quorum,
 		faulty:          faulty,
 		clock:           clock,
 		dur:             dur,
-		sink:            sink,
+		lock:            lock,
 		net:             net,
 		safety:          safety,
 		tree:            tree,
@@ -80,17 +81,19 @@ func (p *Pacemaker) startTimer(newRound uint64) {
 			delete(p.pendingTimeouts, r) // only the current round can still form a TC
 		}
 	}
-	// The callback runs off the consensus goroutine, so it may only enqueue.
+	// The callback runs on its own goroutine, so it takes the caller's lock.
 	epoch := p.epoch
 	p.timer = p.clock.AfterFunc(p.dur.Duration(), func() {
-		p.sink(func(*Core) { p.fire(epoch) })
+		p.lock.Lock()
+		defer p.lock.Unlock()
+		p.fire(epoch)
 	})
 }
 
-// fire runs on the consensus goroutine for the timer armed in epoch. The paper
-// calls local_timeout_round unconditionally (3.1, start_event_processing). The
-// epoch is checked first because the callback only enqueues: one that had
-// already fired when startTimer or Stop disarmed its timer is still queued.
+// fire runs, under the lock, for the timer armed in epoch. DiemBFT 3.1
+// start_event_processing calls local_timeout_round unconditionally. The epoch
+// is checked first because a callback can fire and then wait for the lock
+// while another call disarms its timer, and Timer.Stop cannot recall it.
 // Running it would abandon a round the replica has since entered on a good
 // certificate, or time out a re-armed round a second time.
 func (p *Pacemaker) fire(epoch uint64) {

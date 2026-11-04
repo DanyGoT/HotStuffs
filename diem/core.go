@@ -2,14 +2,16 @@ package diem
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
 )
 
 // Core is the paper's Main module (3.1): one method per input, each
-// dispatching to the other modules. It owns all protocol state and runs on a
-// single goroutine, so it holds no locks, and it never enqueues — every
-// self-addressed message goes out through the transport's local node.
+// dispatching to the other modules. It owns all protocol state and is not
+// safe for concurrent use, so the caller serializes every call with
+// Config.Lock. Every self-addressed message goes out through the transport's
+// local node.
 type Core struct {
 	id     uint32
 	crypto Crypto
@@ -22,12 +24,10 @@ type Core struct {
 	safety    *Safety
 	pacemaker *Pacemaker
 	leaders   *LeaderElection
-
-	observe func(State)
 }
 
 // Config is everything a Core needs. Every field is required except
-// Transactions, Observer, WindowSize and ExcludeSize.
+// Transactions, WindowSize and ExcludeSize.
 type Config struct {
 	ID         uint32
 	Validators []uint32
@@ -37,10 +37,11 @@ type Config struct {
 	Clock      Clock
 	Backoff    *Backoff
 
-	// Sink accepts Queue inputs from any goroutine. Only the round timer uses
-	// it: its callback runs off the consensus goroutine, so it may enqueue and
-	// nothing else. Production passes Queue.Push.
-	Sink func(any)
+	// Lock is the lock the caller serializes Core calls with. The round
+	// timer's callback runs on its own goroutine and takes it. The transport,
+	// the ledger's OnCommit and Transactions run under it, so they must not
+	// call back into the core or take it again.
+	Lock sync.Locker
 
 	// Transactions supplies the payload for a leader's proposal (paper 3.6).
 	// Nil proposes empty blocks, which still commits the pipeline below them.
@@ -51,14 +52,9 @@ type Config struct {
 	// paper puts between f and 2f. Zero picks the defaults below.
 	WindowSize  int
 	ExcludeSize int
-
-	// Observer, if set, runs after every input the Loop processes, with the
-	// state it produced. Every protocol-level counter is a delta on that
-	// snapshot.
-	Observer func(State)
 }
 
-// State is the scalar snapshot an observer sees.
+// State is a scalar snapshot of this replica's progress.
 type State struct {
 	Round            uint64
 	HighQCRound      uint64
@@ -96,7 +92,7 @@ func New(cfg Config) *Core {
 
 	tree := NewBlockTree(cfg.ID, quorum, cfg.Ledger, cfg.Crypto)
 	safety := NewSafety(cfg.ID, NewVerifier(cfg.Crypto, quorum), cfg.Crypto, cfg.Ledger, tree)
-	pacemaker := NewPacemaker(quorum, faulty, cfg.Clock, cfg.Backoff, cfg.Sink, cfg.Transport, safety, tree)
+	pacemaker := NewPacemaker(quorum, faulty, cfg.Clock, cfg.Backoff, cfg.Lock, cfg.Transport, safety, tree)
 	leaders := NewLeaderElection(cfg.Validators, window, exclude, cfg.Ledger, pacemaker)
 
 	return &Core{
@@ -111,7 +107,6 @@ func New(cfg Config) *Core {
 		safety:    safety,
 		pacemaker: pacemaker,
 		leaders:   leaders,
-		observe:   cfg.Observer,
 	}
 }
 
@@ -155,6 +150,24 @@ func (c *Core) State() State {
 		HighestQCRound:   c.safety.HighestQCRound(),
 
 		DeclinedMissingAncestor: c.safety.DeclinedMissingAncestor(),
+	}
+}
+
+// Dispatch hands m to the method for its type: a verified *diempb message, a
+// fetched *diempb.Block, or a func(*Core). It is the paper's
+// start_event_processing (3.1).
+func (c *Core) Dispatch(m any) {
+	switch m := m.(type) {
+	case *diempb.ProposalMsg:
+		c.OnProposal(m)
+	case *diempb.VoteMsg:
+		c.OnVote(m)
+	case *diempb.TimeoutMsg:
+		c.OnTimeout(m)
+	case *diempb.Block:
+		c.OnBlock(m)
+	case func(*Core):
+		m(c)
 	}
 }
 

@@ -77,6 +77,17 @@ func (c *fakeClock) Advance(d time.Duration) {
 	}
 }
 
+// take removes the next timer due within d and returns its callback unrun: a
+// timer that has fired and whose callback has not yet got the lock.
+func (c *fakeClock) take(d time.Duration) func() {
+	next := c.earliest(c.now.Add(d))
+	if next == nil {
+		return nil
+	}
+	next.Stop()
+	return next.fn
+}
+
 func (c *fakeClock) earliest(by time.Time) *fakeTimer {
 	var best *fakeTimer
 	for _, t := range c.pending {

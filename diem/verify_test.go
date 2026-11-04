@@ -9,8 +9,8 @@ import (
 )
 
 // The tests here cover the boundary the paper delegates to "other parts of the
-// system": everything that is dropped before a message reaches the consensus
-// goroutine. A Byzantine replica's whole surface is what it can put on the
+// system": everything that is dropped before a message reaches the core. A
+// Byzantine replica's whole surface is what it can put on the
 // wire, so a message that fails any of these checks must leave no trace.
 
 // newTestVerifier returns the Verifier for the 4-replica group testN and

@@ -27,7 +27,7 @@ type Config struct {
 	ID       uint32
 	Peers    map[uint32]string // every replica's address, this one included
 	Listen   string            // ":0" picks a free port; read it back with Addr
-	Sink     func(any)         // where verified inputs go: diem.Queue.Push
+	Sink     func(any)         // where verified inputs go
 	Verifier *diem.Verifier
 
 	OutQueue      int // outbound queue depth; 0 picks a default
@@ -58,10 +58,8 @@ func (a peerAddr) Addr() string { return string(a) }
 // Transport is the Gorums implementation of diem.Transport, together with the
 // server that receives on the other side.
 //
-// Outbound is bounded and dropping; inbound is bounded and blocking. The
-// asymmetry is deliberate: a dropped outbound message is what the round timer
-// recovers from, while dropping an input the replica has already accepted is
-// not recoverable.
+// Outbound is bounded and drops when full, because a lost message is what the
+// round timer recovers from.
 //
 // RequestBlock is the one call with a reply, and an addition: DiemBFT §3
 // defines no block-sync. It lets a replica that lost a proposal vote again.
@@ -138,7 +136,7 @@ func (t *Transport) Start() {
 }
 
 // Stop shuts the server down and waits for the sender to finish. Stop the
-// consensus loop before calling this.
+// core before calling this.
 func (t *Transport) Stop() {
 	t.cancel()
 	t.srv.Stop()
@@ -181,8 +179,8 @@ func (t *Transport) Timeout(m *diempb.TimeoutMsg) {
 // for is the block, so the first such reply is sunk and the rest are dropped.
 // First would take the first reply without checking it.
 //
-// The goroutine is not waited for on Stop: like an inbound handler, it may be
-// blocked on a full queue that the stopped loop no longer drains.
+// Stop does not wait for the goroutine, so a fetch may still reach Sink after
+// it.
 func (t *Transport) RequestBlock(id []byte) {
 	t.enqueue(func(cfg gorums.Config) { go t.fetch(cfg, id) })
 }
@@ -239,7 +237,7 @@ func (t *Transport) drain() {
 			}
 			// GORUMS: a one-way Send blocks once a node's send queue fills, and
 			// Async is the only alternative, so the bounded queue in front of
-			// this goroutine is what keeps the consensus goroutine free.
+			// this goroutine is what keeps a core call from blocking on a send.
 			fn(cfg)
 		}
 	}

@@ -3,6 +3,7 @@ package diem
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func newSim(t *testing.T, n int, down ...uint32) *sim {
 			Transport:    &simNet{s: s, id: id},
 			Clock:        s.clock,
 			Backoff:      NewBackoff(simRoundBase, simRoundMax, 2),
-			Sink:         func(m any) { s.queue = append(s.queue, func() { dispatch(s.cores[id], m) }) },
+			Lock:         new(sync.Mutex),
 		})
 	}
 	return s
@@ -92,7 +93,7 @@ func (s *sim) deliver(to uint32, m any) {
 		s.rejected++
 		return
 	}
-	s.queue = append(s.queue, func() { dispatch(s.cores[to], m) })
+	s.queue = append(s.queue, func() { s.cores[to].Dispatch(m) })
 }
 
 func (s *sim) verify(to uint32, m any) bool {
@@ -339,7 +340,7 @@ func TestDuplicateTimeoutDoesNotRetrigger(t *testing.T) {
 	safety := NewSafety(1, NewVerifier(signer, quorum), signer, ledger, tree)
 	net := &dupNet{}
 	pm := NewPacemaker(quorum, faulty, newFakeClock(),
-		NewBackoff(simRoundBase, simRoundMax, 2), func(any) {}, net, safety, tree)
+		NewBackoff(simRoundBase, simRoundMax, 2), new(sync.Mutex), net, safety, tree)
 	pm.AdvanceRoundQC(genesisQC) // round 1
 
 	timeout := func(from uint32) *diempb.TimeoutMsg {

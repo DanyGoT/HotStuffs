@@ -239,8 +239,8 @@ func report(reps []*replica.Replica) error {
 	for i, r := range reps {
 		logs[i] = r.Log()
 		c := r.Counters()
-		fmt.Fprintf(w, "replica %d: committed %d (%d commands), dropped %d, declined for a missing ancestor %d, rejected %d, queue high-water %d\n",
-			r.ID(), len(logs[i]), r.Commands(), c.OutboundDropped, r.DeclinedMissingAncestor(), c.Rejected, r.QueueHighWater())
+		fmt.Fprintf(w, "replica %d: committed %d (%d commands), dropped %d, declined for a missing ancestor %d, rejected %d\n",
+			r.ID(), len(logs[i]), r.Commands(), c.OutboundDropped, r.DeclinedMissingAncestor(), c.Rejected)
 	}
 	for i := range logs {
 		for j := i + 1; j < len(logs); j++ {
