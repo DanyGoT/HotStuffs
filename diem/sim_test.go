@@ -93,7 +93,7 @@ func (s *sim) deliver(to uint32, m any) {
 		s.rejected++
 		return
 	}
-	s.queue = append(s.queue, func() { s.cores[to].Dispatch(m) })
+	s.queue = append(s.queue, func() { step(s.cores[to], m) })
 }
 
 func (s *sim) verify(to uint32, m any) bool {
@@ -107,6 +107,20 @@ func (s *sim) verify(to uint32, m any) bool {
 		return v.VerifyTimeout(m)
 	}
 	return true // a fetched block, checked against its id by RequestBlock
+}
+
+// step hands m to the Core method for its type.
+func step(c *Core, m any) {
+	switch m := m.(type) {
+	case *diempb.ProposalMsg:
+		c.OnProposal(m)
+	case *diempb.VoteMsg:
+		c.OnVote(m)
+	case *diempb.TimeoutMsg:
+		c.OnTimeout(m)
+	case *diempb.Block:
+		c.OnBlock(m)
+	}
 }
 
 // checkRejections is the point of counting. Apart from what the test forged on

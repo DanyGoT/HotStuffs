@@ -58,8 +58,26 @@ func recv(t *testing.T, q chan any) any {
 	}
 }
 
-// sink pushes onto q, blocking when it is full.
-func sink(q chan any) func(any) { return func(m any) { q <- m } }
+// recorder is an inbound handler that records every message it is handed,
+// and answers a block request with held.
+type recorder struct {
+	q    chan any
+	held *diempb.Block
+}
+
+func (r *recorder) Proposal(_ gorums.ServerContext, in *diempb.ProposalMsg) { r.q <- in }
+func (r *recorder) Vote(_ gorums.ServerContext, in *diempb.VoteMsg)         { r.q <- in }
+func (r *recorder) Timeout(_ gorums.ServerContext, in *diempb.TimeoutMsg)   { r.q <- in }
+
+func (r *recorder) RequestBlock(gorums.ServerContext, *diempb.BlockHash) (*diempb.Block, error) {
+	if r.held == nil {
+		return nil, errNoBlock
+	}
+	return r.held, nil
+}
+
+// record serves p's transport with a recorder in place of a core.
+func record(p *peer) { p.tr.serve(&recorder{q: p.q}) }
 
 // drained reports whether q is empty right now.
 func drained(q chan any) bool {
@@ -72,16 +90,17 @@ func drained(q chan any) bool {
 }
 
 type peer struct {
+	id uint32
 	tr *Transport
 	q  chan any
 }
 
 // newGroup builds n Gorums-local replicas wired into one peer group and starts
-// them, registering cleanup to stop everything in the right order.
+// each with start, registering cleanup to stop everything in the right order.
 // GORUMS: peer addresses must all be known before any server is constructed,
 // so this binds n real loopback listeners via NewLocalServers rather than
 // letting each transport pick its own port.
-func newGroup(t *testing.T, n int) []*peer {
+func newGroup(t *testing.T, n int, start func(*peer)) []*peer {
 	t.Helper()
 	srvs, stop, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(insecureDial))
 	if err != nil {
@@ -94,15 +113,16 @@ func newGroup(t *testing.T, n int) []*peer {
 		id := uint32(i + 1)
 		q := make(chan any, 256)
 		peers[i] = &peer{
+			id: id,
 			tr: New(Config{
-				ID: id, Server: srvs[i], Sink: sink(q),
+				ID: id, Server: srvs[i],
 				Verifier: diem.NewVerifier(signer(t, id, n), diem.QuorumSize(n)),
 			}),
 			q: q,
 		}
 	}
 	for _, p := range peers {
-		p.tr.Start()
+		start(p)
 	}
 	t.Cleanup(func() {
 		for _, p := range peers {
@@ -145,6 +165,23 @@ func round1(t *testing.T, from uint32, n int) (*diempb.ProposalMsg, *diempb.Vote
 		Sig:          sig(t, signer, from, blk.GetId()),
 	}.Build()
 
+	timeout := diempb.TimeoutMsg_builder{
+		TmoInfo: diempb.TimeoutInfo_builder{
+			Round:  1,
+			HighQc: qc,
+			Sender: from,
+			Sig:    sig(t, signer, from, diem.TimeoutDigest(1, 0)),
+		}.Build(),
+		HighCommitQc: qc,
+	}.Build()
+	return proposal, voteOn(t, from, n, blk), timeout
+}
+
+// voteOn is from's vote for blk, a round-1 block over the genesis certificate,
+// in a group of n.
+func voteOn(t *testing.T, from uint32, n int, blk *diempb.Block) *diempb.VoteMsg {
+	t.Helper()
+	qc := diem.GenesisQC()
 	voteInfo := diempb.VoteInfo_builder{
 		Id:          blk.GetId(),
 		Round:       1,
@@ -155,24 +192,13 @@ func round1(t *testing.T, from uint32, n int) (*diempb.ProposalMsg, *diempb.Vote
 		CommitStateId: make([]byte, 32),
 		VoteInfoHash:  diem.VoteInfoHash(voteInfo),
 	}.Build()
-	vote := diempb.VoteMsg_builder{
+	return diempb.VoteMsg_builder{
 		VoteInfo:         voteInfo,
 		LedgerCommitInfo: commit,
 		HighCommitQc:     qc,
 		Sender:           from,
-		Sig:              sig(t, signer, from, diem.LedgerCommitDigest(commit)),
+		Sig:              sig(t, signer(t, from, n), from, diem.LedgerCommitDigest(commit)),
 	}.Build()
-
-	timeout := diempb.TimeoutMsg_builder{
-		TmoInfo: diempb.TimeoutInfo_builder{
-			Round:  1,
-			HighQc: qc,
-			Sender: from,
-			Sig:    sig(t, signer, from, diem.TimeoutDigest(1, 0)),
-		}.Build(),
-		HighCommitQc: qc,
-	}.Build()
-	return proposal, vote, timeout
 }
 
 // TestMulticastReachesAll checks that a proposal and a timeout reach all four
@@ -183,7 +209,7 @@ func round1(t *testing.T, from uint32, n int) (*diempb.ProposalMsg, *diempb.Vote
 // message, so Core needs no "this one is mine" branch.
 func TestMulticastReachesAll(t *testing.T) {
 	const n = 4
-	peers := newGroup(t, n)
+	peers := newGroup(t, n, record)
 	proposal, _, timeout := round1(t, 1, n)
 
 	t.Run("Proposal", func(t *testing.T) {
@@ -217,7 +243,7 @@ func TestMulticastReachesAll(t *testing.T) {
 // so exactly one replica must see it and the other three must see nothing.
 func TestVoteIsUnicast(t *testing.T) {
 	const n, to = 4, uint32(3)
-	peers := newGroup(t, n)
+	peers := newGroup(t, n, record)
 	_, vote, _ := round1(t, 1, n)
 
 	peers[0].tr.Vote(vote, to)
@@ -245,7 +271,7 @@ func TestVoteIsUnicast(t *testing.T) {
 // that ID, so the send is counted rather than panicking on a nil node.
 func TestVoteToUnknownReplicaIsDropped(t *testing.T) {
 	const n = 4
-	peers := newGroup(t, n)
+	peers := newGroup(t, n, record)
 	_, vote, _ := round1(t, 1, n)
 
 	before := peers[0].tr.Counters().OutboundDropped
@@ -258,12 +284,11 @@ func TestVoteToUnknownReplicaIsDropped(t *testing.T) {
 
 // TestHandlerRejectsMalformed drives the handler directly, with no server
 // involved. Each row is verifier-rejected, and each must increment rejected
-// without pushing anything. This is the test that shows the transport boundary
-// is the security boundary.
+// without reaching the core, which this handler does not have. This is the
+// test that shows the transport boundary is the security boundary.
 func TestHandlerRejectsMalformed(t *testing.T) {
 	const n = 4
-	q := make(chan any, 8)
-	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: sink(q)}
+	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n))}
 	proposal, vote, timeout := round1(t, 1, n)
 
 	forged := diempb.Signature_builder{Signer: 1, Sig: []byte("forged")}.Build()
@@ -312,66 +337,79 @@ func TestHandlerRejectsMalformed(t *testing.T) {
 			if got := h.rejected.Load(); got != before+1 {
 				t.Errorf("rejected = %d, want %d", got, before+1)
 			}
-			if !drained(q) {
-				t.Error("queue is not empty, want nothing pushed")
-			}
 		})
 	}
 }
 
-// TestHandlerAcceptsWellFormed is the other half of the boundary: the same
-// three messages, unmodified, must reach the sink.
+// TestHandlerAcceptsWellFormed is the other half of the boundary: well-formed
+// messages of each type must reach the core, and each shows in its state. The
+// proposal leaves its block in the tree, a quorum of timeouts moves the core to
+// round 2 on a TC, and then a quorum of votes for the proposal forms a QC.
 func TestHandlerAcceptsWellFormed(t *testing.T) {
 	const n = 4
-	q := make(chan any, 8)
-	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), sink: sink(q)}
-	proposal, vote, timeout := round1(t, 1, n)
+	core, mu := newCore(t, 2)
+	h := &handler{ver: diem.NewVerifier(signer(t, 2, n), diem.QuorumSize(n)), core: core, mu: mu}
+	state := func() diem.State {
+		mu.Lock()
+		defer mu.Unlock()
+		return core.State()
+	}
+	proposal, _, _ := round1(t, 1, n)
+	blk := proposal.GetBlock()
 
-	h.Proposal(gorums.ServerContext{}, proto.Clone(proposal).(*diempb.ProposalMsg))
-	h.Vote(gorums.ServerContext{}, proto.Clone(vote).(*diempb.VoteMsg))
-	h.Timeout(gorums.ServerContext{}, proto.Clone(timeout).(*diempb.TimeoutMsg))
+	h.Proposal(gorums.ServerContext{}, proposal)
+	mu.Lock()
+	held := core.Block(blk.GetId())
+	mu.Unlock()
+	if held == nil {
+		t.Error("the proposal's block did not reach the core")
+	}
+
+	for _, from := range []uint32{1, 3, 4} {
+		_, _, timeout := round1(t, from, n)
+		h.Timeout(gorums.ServerContext{}, timeout)
+	}
+	if got := state().Round; got != 2 {
+		t.Errorf("round = %d after a quorum of timeouts, want 2", got)
+	}
+
+	for _, from := range []uint32{1, 3, 4} {
+		h.Vote(gorums.ServerContext{}, voteOn(t, from, n, blk))
+	}
+	if got := state().HighQCRound; got != 1 {
+		t.Errorf("high QC round = %d after a quorum of votes, want 1", got)
+	}
 
 	if got := h.rejected.Load(); got != 0 {
-		t.Fatalf("rejected = %d, want 0", got)
-	}
-	for _, want := range []string{"proposal", "vote", "timeout"} {
-		switch m := recv(t, q).(type) {
-		case *diempb.ProposalMsg:
-			if want != "proposal" {
-				t.Errorf("got a proposal, want a %s", want)
-			}
-			if !bytes.Equal(m.GetBlock().GetId(), proposal.GetBlock().GetId()) {
-				t.Errorf("block id = %x, want %x", m.GetBlock().GetId(), proposal.GetBlock().GetId())
-			}
-		case *diempb.VoteMsg:
-			if want != "vote" {
-				t.Errorf("got a vote, want a %s", want)
-			}
-		case *diempb.TimeoutMsg:
-			if want != "timeout" {
-				t.Errorf("got a timeout, want a %s", want)
-			}
-		}
+		t.Errorf("rejected = %d, want 0", got)
 	}
 }
 
-// holding is an unstarted core whose pending tree holds b, if b is not nil, so
-// that Block(b's id) answers with b whatever b's content.
-func holding(t *testing.T, b *diempb.Block) *diem.Core {
+// newCore is a started core for replica id of 4 that sends nothing, with the
+// lock it is called under. Its round timer is long enough never to fire in a
+// test.
+func newCore(t *testing.T, id uint32) (*diem.Core, *sync.Mutex) {
 	t.Helper()
+	mu := new(sync.Mutex)
 	c := diem.New(diem.Config{
-		ID:         1,
+		ID:         id,
 		Validators: []uint32{1, 2, 3, 4},
 		Ledger:     diem.NewMemLedger(),
-		Crypto:     signer(t, 1, 4),
+		Crypto:     signer(t, id, 4),
 		Transport:  nopNet{},
 		Clock:      diem.SystemClock{},
-		Backoff:    diem.NewBackoff(time.Second, time.Second, 2),
+		Backoff:    diem.NewBackoff(time.Hour, time.Hour, 2),
+		Lock:       mu,
 	})
-	if b != nil {
-		c.OnBlock(b)
-	}
-	return c
+	mu.Lock()
+	c.Start()
+	mu.Unlock()
+	t.Cleanup(func() {
+		mu.Lock()
+		c.Stop()
+		mu.Unlock()
+	})
+	return c, mu
 }
 
 type nopNet struct{}
@@ -380,42 +418,6 @@ func (nopNet) Proposal(*diempb.ProposalMsg) {}
 func (nopNet) Vote(*diempb.VoteMsg, uint32) {}
 func (nopNet) Timeout(*diempb.TimeoutMsg)   {}
 func (nopNet) RequestBlock([]byte)          {}
-
-// answer runs every block request p receives against a core holding b, and
-// keeps whatever else arrives. The func it returns stops it and hands back what
-// it kept.
-func answer(t *testing.T, p *peer, b *diempb.Block) func() []any {
-	core := holding(t, b)
-	var kept []any
-	done, exited := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(exited)
-		for {
-			select {
-			case <-done:
-				return
-			case m := <-p.q:
-				if f, ok := m.(func(*diem.Core)); ok {
-					f(core)
-				} else {
-					kept = append(kept, m)
-				}
-			}
-		}
-	}()
-	return func() []any {
-		close(done)
-		<-exited
-		for {
-			select {
-			case m := <-p.q:
-				kept = append(kept, m)
-			default:
-				return kept
-			}
-		}
-	}
-}
 
 // TestRequestBlockChecksTheID has one peer answer a block request with a
 // forgery that claims the requested id. Only a block whose recomputed id is
@@ -440,28 +442,31 @@ func TestRequestBlockChecksTheID(t *testing.T) {
 		{"forgery and block", want},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			peers := newGroup(t, n)
-			for i, b := range []*diempb.Block{forged, nil, tc.held} {
-				stop := answer(t, peers[i+1], b)
-				t.Cleanup(func() { stop() })
-			}
-			self := answer(t, peers[0], nil)
+			// Replica 2 asks; it does not lead round 1, so its core holds no
+			// block of its own. The others answer with what they hold.
+			core, mu := newCore(t, 2)
+			held := map[uint32]*diempb.Block{1: forged, 3: nil, 4: tc.held}
+			peers := newGroup(t, n, func(p *peer) {
+				if p.id == 2 {
+					p.tr.Start(core, mu)
+					return
+				}
+				p.tr.serve(&recorder{q: p.q, held: held[p.id]})
+			})
 
-			peers[0].tr.fetch(peers[0].tr.peers(), want.GetId())
-			got := self()
+			peers[1].tr.fetch(peers[1].tr.peers(), want.GetId())
 
+			mu.Lock()
+			got := core.Block(want.GetId())
+			mu.Unlock()
 			if tc.held == nil {
-				if len(got) != 0 {
-					t.Fatalf("got %d inputs from a fetch no correct peer answered, want none", len(got))
+				if got != nil {
+					t.Fatalf("a fetch no correct peer answered reached the core with %+v", got)
 				}
 				return
 			}
-			if len(got) != 1 {
-				t.Fatalf("got %d inputs, want the one block", len(got))
-			}
-			b, ok := got[0].(*diempb.Block)
-			if !ok || !proto.Equal(b, want) {
-				t.Fatalf("got %+v, want the requested block", got[0])
+			if !proto.Equal(got, want) {
+				t.Fatalf("the core holds %+v, want the requested block", got)
 			}
 		})
 	}
@@ -476,7 +481,6 @@ func TestOutboundQueueDrops(t *testing.T) {
 		// This replica's own ID resolves to an in-process node regardless of
 		// the address given, so the placeholder is never dialed.
 		Peers:    map[uint32]string{1: "127.0.0.1:0"},
-		Sink:     sink(make(chan any, 8)),
 		Verifier: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)),
 	})
 	t.Cleanup(tr.Stop)
@@ -507,7 +511,6 @@ func TestStopIdempotent(t *testing.T) {
 		return New(Config{
 			ID: 1, Listen: "127.0.0.1:0",
 			Peers:    map[uint32]string{1: "127.0.0.1:0"},
-			Sink:     sink(make(chan any, 1)),
 			Verifier: diem.NewVerifier(signer(t, 1, 1), diem.QuorumSize(1)),
 		})
 	}
@@ -520,7 +523,7 @@ func TestStopIdempotent(t *testing.T) {
 
 	t.Run("started", func(t *testing.T) {
 		tr := newTransport()
-		tr.Start()
+		tr.serve(&recorder{q: make(chan any, 1)})
 		tr.Stop()
 		tr.Stop()
 	})
@@ -542,16 +545,7 @@ type node struct {
 	core *diem.Core
 
 	mu      sync.Mutex
-	stopped bool
 	commits []*diempb.Block
-}
-
-func (n *node) deliver(m any) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if !n.stopped {
-		n.core.Dispatch(m)
-	}
 }
 
 func (n *node) log() []*diempb.Block {
@@ -587,7 +581,7 @@ func newCluster(t *testing.T, n int) []*node {
 		ledger := diem.NewMemLedger()
 		ledger.OnCommit = func(b *diempb.Block) { nd.commits = append(nd.commits, b) }
 		nd.tr = New(Config{
-			ID: id, Server: srvs[i], Sink: nd.deliver,
+			ID: id, Server: srvs[i],
 			Verifier: diem.NewVerifier(signer, diem.QuorumSize(n)),
 		})
 		nd.core = diem.New(diem.Config{
@@ -607,22 +601,21 @@ func newCluster(t *testing.T, n int) []*node {
 
 // run starts every node and returns the func that stops them all. Each node's
 // mu is held until its core has started, so an early message waits for it.
-// Stopping marks every node stopped under its mu before the transports go
-// down, because Gorums never waits for its handler goroutines. It is
+// Stopping stops every core under its mu before the transports go down,
+// because Gorums never waits for its handler goroutines. It is
 // idempotent, so a test can both defer it and call it early to quiesce the
 // cluster before reading core state.
 func run(t *testing.T, nodes []*node) func() {
 	t.Helper()
 	for _, nd := range nodes {
 		nd.mu.Lock()
-		nd.tr.Start()
+		nd.tr.Start(nd.core, &nd.mu)
 	}
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer waitCancel()
 	for _, nd := range nodes {
 		if err := nd.tr.WaitForPeers(waitCtx); err != nil {
 			for _, nd := range nodes {
-				nd.stopped = true
 				nd.mu.Unlock()
 				nd.tr.Stop()
 			}
@@ -639,7 +632,6 @@ func run(t *testing.T, nodes []*node) func() {
 		once.Do(func() {
 			for _, nd := range nodes {
 				nd.mu.Lock()
-				nd.stopped = true
 				nd.core.Stop()
 				nd.mu.Unlock()
 			}
