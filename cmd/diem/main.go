@@ -42,6 +42,7 @@ var (
 	insecureSeeded = flag.Bool("insecure-seeded-keys", false, "without -keys, derive every replica's keys from a public seed; anyone can sign for any replica")
 	genKeys        = flag.Bool("gen-keys", false, "write a key pair per replica into -keys and exit")
 	viewDuration   = flag.Duration("view-duration", 0, "base round timeout; 0 picks a default")
+	sendBuffer     = flag.Uint("send-buffer", 0, "Gorums send queue capacity per peer; 0 picks Gorums' default")
 )
 
 func main() {
@@ -229,6 +230,7 @@ func writeResults(reps []*replica.Replica) error {
 		cfg.ApplyDimensions(benchkit.Dimensions{
 			Benchmark: "diem", Nodes: n,
 			Workers: std.Workers, Payload: std.Payload, Rate: std.Rate,
+			SendBuffer: int(*sendBuffer),
 		})
 		cfg.SetDuration(int64(std.Duration))
 		cfg.SetInterval(int64(std.Interval))
@@ -304,5 +306,8 @@ func transactions() func() [][]byte {
 // GORUMS: NewLocalServers and any real dial need explicit transport
 // credentials; there is no insecure default.
 func dialOptions() []gorums.DialOption {
-	return []gorums.DialOption{gorums.WithGRPCDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials()))}
+	return []gorums.DialOption{
+		gorums.WithGRPCDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		gorums.WithSendBufferSize(*sendBuffer),
+	}
 }
