@@ -633,10 +633,10 @@ func newCluster(t *testing.T, n int) []*node {
 
 // run starts every node and returns the func that stops them all. Each node's
 // mu is held until its core has started, so an early message waits for it.
-// Stopping stops every core under its mu before the transports go down,
-// because Gorums never waits for its handler goroutines. It is
-// idempotent, so a test can both defer it and call it early to quiesce the
-// cluster before reading core state.
+// Stopping takes the transports down first, since a core call waiting on a
+// send holds mu, then stops every core under its mu, because Gorums never
+// waits for its handler goroutines. It is idempotent, so a test can both
+// defer it and call it early to quiesce the cluster before reading core state.
 func run(t *testing.T, nodes []*node) func() {
 	t.Helper()
 	for _, nd := range nodes {
@@ -663,12 +663,12 @@ func run(t *testing.T, nodes []*node) func() {
 	return func() {
 		once.Do(func() {
 			for _, nd := range nodes {
+				nd.tr.Stop()
+			}
+			for _, nd := range nodes {
 				nd.mu.Lock()
 				nd.core.Stop()
 				nd.mu.Unlock()
-			}
-			for _, nd := range nodes {
-				nd.tr.Stop()
 			}
 		})
 	}

@@ -129,7 +129,8 @@ func (t *Transport) serve(h diempb.DiemServer) {
 }
 
 // Stop ends every send still waiting for queue space and shuts the server
-// down. Stop the core before calling this.
+// down. Call it before stopping the core under its lock, since a core call
+// waiting on a send holds that lock.
 func (t *Transport) Stop() {
 	t.cancel()
 	t.srv.Stop()

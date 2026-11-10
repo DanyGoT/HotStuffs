@@ -156,7 +156,7 @@ func (r *Replica) commit(b *diempb.Block) {
 // configuration is simply lost, and the replicas that missed it must fetch it
 // before they can vote again. mu is held until the core has started, so a
 // message that arrives earlier waits for it. Cancelling ctx is how a replica
-// stops; the transport is shut down after the core, never before.
+// stops; the transport is shut down before the core.
 func (r *Replica) Run(ctx context.Context) error {
 	r.mu.Lock()
 	r.net.Start(r.core, &r.mu)
@@ -176,13 +176,15 @@ func (r *Replica) Run(ctx context.Context) error {
 	}
 	<-ctx.Done()
 
-	// Gorums does not wait for its handler goroutines on Stop, so a late
-	// message can still reach the core, and a stopped core ignores it.
+	// A core call may be waiting for space in a full send queue with mu held,
+	// and only the transport's Stop ends that wait. Gorums does not wait for
+	// its handler goroutines on Stop, so a late message can still reach the
+	// core, and a stopped core ignores it.
+	r.net.Stop()
 	r.mu.Lock()
 	r.core.Stop()
 	r.result = r.m.Finish()
 	r.mu.Unlock()
-	r.net.Stop()
 	return ctx.Err()
 }
 
