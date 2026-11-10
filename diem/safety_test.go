@@ -278,7 +278,7 @@ func TestMakeTimeout(t *testing.T) {
 		if f.safety.HighestVoteRound() != 1 {
 			t.Errorf("HighestVoteRound = %d, want 1", f.safety.HighestVoteRound())
 		}
-		digest := TimeoutDigest(to.GetRound(), QCRound(to.GetHighQc()))
+		digest := TimeoutDigest(to.GetRound(), to.GetHighQc().Round())
 		if !verifySig(f.crypto, digest, to.GetSig()) {
 			t.Error("timeout signature does not verify against TimeoutDigest(round, highQC.Round())")
 		}

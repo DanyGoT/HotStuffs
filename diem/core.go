@@ -151,8 +151,8 @@ func (c *Core) Stop() {
 func (c *Core) State() State {
 	return State{
 		Round:            c.pacemaker.CurrentRound(),
-		HighQCRound:      QCRound(c.tree.HighQC()),
-		HighCommitRound:  QCRound(c.tree.HighCommitQC()),
+		HighQCRound:      c.tree.HighQC().Round(),
+		HighCommitRound:  c.tree.HighCommitQC().Round(),
 		HighestVoteRound: c.safety.HighestVoteRound(),
 		HighestQCRound:   c.safety.HighestQCRound(),
 
@@ -296,7 +296,7 @@ func (c *Core) processNewRoundEvent(lastTC *diempb.TimeoutCert) {
 	}
 	c.net.Proposal(diempb.ProposalMsg_builder{
 		Block:        b,
-		LastRoundTc:  justifyingTC(QCRound(b.GetQc()), round, lastTC),
+		LastRoundTc:  justifyingTC(b.GetQc().Round(), round, lastTC),
 		HighCommitQc: c.tree.HighCommitQC(),
 		Sender:       c.id,
 		Sig:          sig,

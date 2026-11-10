@@ -124,7 +124,7 @@ func (p *Pacemaker) LocalTimeoutRound() {
 	// from a proposal, and by the same rule.
 	p.net.Timeout(diempb.TimeoutMsg_builder{
 		TmoInfo:      info,
-		LastRoundTc:  justifyingTC(QCRound(info.GetHighQc()), info.GetRound(), p.lastRoundTC),
+		LastRoundTc:  justifyingTC(info.GetHighQc().Round(), info.GetRound(), p.lastRoundTC),
 		HighCommitQc: p.tree.HighCommitQC(),
 	}.Build())
 }
@@ -167,7 +167,7 @@ func (p *Pacemaker) ProcessRemoteTimeout(tmo *diempb.TimeoutMsg) *diempb.Timeout
 	}
 	votes := make([]*diempb.TimeoutVote, 0, len(b.infos))
 	for _, i := range b.infos {
-		votes = append(votes, diempb.TimeoutVote_builder{HighQcRound: QCRound(i.GetHighQc()), Sig: i.GetSig()}.Build())
+		votes = append(votes, diempb.TimeoutVote_builder{HighQcRound: i.GetHighQc().Round(), Sig: i.GetSig()}.Build())
 	}
 	// Signer order is canonical for the same reason BlockTree.canonical
 	// sorts a QC's signatures: one certificate has one wire form, and a
@@ -195,12 +195,12 @@ func (p *Pacemaker) AdvanceRoundTC(tc *diempb.TimeoutCert) bool {
 // justified by the certificate alone, and a stale TC carried into a proposal
 // would make it ill-formed.
 func (p *Pacemaker) AdvanceRoundQC(qc *diempb.QuorumCert) bool {
-	if QCRound(qc) < p.currentRound {
+	if qc.Round() < p.currentRound {
 		return false
 	}
 	p.dur.Reset()
 	p.lastRoundTC = nil
-	p.startTimer(QCRound(qc) + 1)
+	p.startTimer(qc.Round() + 1)
 	return true
 }
 

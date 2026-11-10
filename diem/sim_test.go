@@ -235,7 +235,7 @@ func (s *sim) checkChained() {
 	for _, id := range s.live() {
 		c := s.commits[id]
 		for i := 1; i < len(c); i++ {
-			if !bytes.Equal(parentID(c[i]), c[i-1].GetId()) {
+			if !bytes.Equal(c[i].ParentID(), c[i-1].GetId()) {
 				s.t.Fatalf("replica %d: commit %d (round %d) does not extend commit %d (round %d)",
 					id, i, c[i].GetRound(), i-1, c[i-1].GetRound())
 			}
@@ -301,9 +301,9 @@ func TestCommitsAreTwoChains(t *testing.T) {
 			if b.GetRound() == 0 {
 				continue
 			}
-			if QCRound(b.GetQc())+1 != b.GetRound() {
+			if b.GetQc().Round()+1 != b.GetRound() {
 				t.Fatalf("replica %d committed block at round %d over a QC for round %d: not a 2-chain",
-					id, b.GetRound(), QCRound(b.GetQc()))
+					id, b.GetRound(), b.GetQc().Round())
 			}
 		}
 	}

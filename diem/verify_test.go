@@ -94,7 +94,7 @@ func TestVerifyProposalRejectsCertificateAtOrAboveItsOwnRound(t *testing.T) {
 		Sender:      1,
 		Sig:         signAs(1, b.GetId()),
 	}.Build()
-	if !WellFormedProposal(p) {
+	if !p.WellFormed() {
 		t.Fatal("setup: the proposal is meant to pass the well-formedness rule")
 	}
 	if v.VerifyProposal(p) {

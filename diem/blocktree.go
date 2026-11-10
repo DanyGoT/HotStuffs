@@ -83,13 +83,13 @@ func (t *BlockTree) ProcessQC(qc *diempb.QuorumCert) {
 	if qc == nil {
 		return
 	}
-	if Commits(qc.GetLedgerCommitInfo()) {
+	if qc.GetLedgerCommitInfo().Commits() {
 		vi := qc.GetVoteInfo()
 		t.ledger.Commit(vi.GetParentId())
 		t.prune(vi.GetParentId(), vi.GetParentRound())
-		t.highCommitQC = higher(qc, t.highCommitQC)
+		t.highCommitQC = qc.Higher(t.highCommitQC)
 	}
-	t.highQC = higher(qc, t.highQC)
+	t.highQC = qc.Higher(t.highQC)
 }
 
 // ExecuteAndInsert speculatively executes b and adds it to the pending tree.
@@ -167,7 +167,7 @@ func (t *BlockTree) prune(rootID []byte, rootRound uint64) {
 	for changed := true; changed; {
 		changed = false
 		for id, b := range t.pending {
-			parent := string(parentID(b))
+			parent := string(b.ParentID())
 			if id == root || parent == root {
 				continue
 			}

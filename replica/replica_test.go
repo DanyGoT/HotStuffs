@@ -89,8 +89,6 @@ func cluster(t *testing.T, n int, round time.Duration) ([]*Replica, func(context
 	return reps, run
 }
 
-func parentID(b *diempb.Block) []byte { return b.GetQc().GetVoteInfo().GetId() }
-
 func depths(reps []*Replica) []int {
 	d := make([]int, len(reps))
 	for i, r := range reps {
@@ -140,11 +138,11 @@ func TestClusterCommitsIdenticalPrefix(t *testing.T) {
 		}
 	}
 	for i, log := range logs {
-		if !bytes.Equal(parentID(log[0]), diem.GenesisBlock().GetId()) {
+		if !bytes.Equal(log[0].ParentID(), diem.GenesisBlock().GetId()) {
 			t.Errorf("replica %d: the first commit does not extend genesis", i+1)
 		}
 		for k := 1; k < len(log); k++ {
-			if !bytes.Equal(parentID(log[k]), log[k-1].GetId()) {
+			if !bytes.Equal(log[k].ParentID(), log[k-1].GetId()) {
 				t.Errorf("replica %d: commit %d does not extend commit %d", i+1, k, k-1)
 			}
 			if log[k].GetRound() <= log[k-1].GetRound() {

@@ -69,7 +69,7 @@ func (e *LeaderElection) UpdateLeaders(qc *diempb.QuorumCert) {
 		return
 	}
 	extendedRound := qc.GetVoteInfo().GetParentRound()
-	qcRound := QCRound(qc)
+	qcRound := qc.Round()
 	currentRound := e.pacemaker.CurrentRound()
 	if extendedRound+1 != qcRound || qcRound+1 != currentRound {
 		return
@@ -128,7 +128,7 @@ func (e *LeaderElection) electReputationLeader(qc *diempb.QuorumCert) (uint32, b
 		return 0, false
 	}
 	slices.Sort(candidates)
-	return candidates[pick(QCRound(qc), len(candidates))], true
+	return candidates[pick(qc.Round(), len(candidates))], true
 }
 
 // pick is the paper's pick_one(seed): a deterministic index into the candidate

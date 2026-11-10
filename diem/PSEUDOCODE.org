@@ -172,21 +172,23 @@ The paper defines the message types here as well as the module. Those first.
 
 - =VoteInfo= :: =diem.proto:VoteInfo=.
 - =LedgerCommitInfo= :: =diem.proto:LedgerCommitInfo=; the paper's bottom
-  =commit_state_id= is the zero hash, tested by =types.go:Commits=.
+  =commit_state_id= is the zero hash, tested by
+  =proto/diempb/methods.go:Commits=.
 - =VoteMsg= :: =diem.proto:VoteMsg=.
-- =QC= :: =diem.proto:QuorumCert=, with =types.go:QCRound= and =higher=, which
-  is the paper's =max_round{}=.
+- =QC= :: =diem.proto:QuorumCert=, with =proto/diempb/methods.go:Round= and
+  =Higher=, which is the paper's =max_round{}=.
 - =Block= :: =diem.proto:Block=, built by =types.go:NewBlock=; the id formula
   =hash(author || round || payload || qc.vote_info.id || qc.signatures)= is
   =hash.go:blockID=.
 - =TimeoutInfo= :: =diem.proto:TimeoutInfo=.
-- =TC= :: =diem.proto:TimeoutCert=, plus =types.go:MaxHighQCRound=, the paper's
+- =TC= :: =diem.proto:TimeoutCert=, plus
+  =proto/diempb/methods.go:MaxHighQCRound=, the paper's
   =max(tc.tmo_high_qc_rounds)=.
 - =TimeoutMsg= :: =diem.proto:TimeoutMsg=. =ProposalMsg= ::
   =diem.proto:ProposalMsg=.
 - Well-formedness :: the paper states it as prose, not pseudocode; it is
-  =types.go:wellFormed= with the two entry points =WellFormedProposal= and
-  =WellFormedTimeout=.
+  =proto/diempb/methods.go:wellFormed= with the two entry points
+  =WellFormed= on =ProposalMsg= and =TimeoutMsg=.
 
 One deviation in the types: the paper keeps a TC's =tmo_high_qc_rounds= and
 =tmo_signatures= in two parallel vectors. =diem.proto:TimeoutVote= is one
@@ -274,7 +276,8 @@ A block may skip rounds only behind a TC for the round directly below it, and
 only when its certificate is at least as high as every certificate that TC's
 quorum reported.
 
-- Implemented :: =safety.go:safeToExtend=, over =types.go:MaxHighQCRound=.
+- Implemented :: =safety.go:safeToExtend=, over
+  =proto/diempb/methods.go:MaxHighQCRound=.
 - Differs :: a nil guard in =safeToExtend=. The paper dereferences =tc.round=
   and =tc.tmo_high_qc_rounds= with no guard, while =safe_to_vote= calls it with
   a =tc= that may be nil.
@@ -606,14 +609,15 @@ the protocol; all of it is the kind of thing that costs a reader time.
   =commit_state_id_candidate= reads =qc.id=, and =process_vote= constructs a QC
   from =state_id= and =votes=. All four should be paths through =vote_info= or
   the declared names; the implementation reads them that way
-  (=blocktree.go:ExecuteAndInsert= via =types.go:parentID=,
+  (=blocktree.go:ExecuteAndInsert= via =proto/diempb/methods.go:ParentID=,
   =safety.go:commitStateIDCandidate=, =blocktree.go:ProcessVote=).
 - Several procedures dereference a possibly-nil argument. =safe_to_extend= and
   =safe_to_timeout= read =tc.round= where the caller may pass nil;
   =process_certificate_qc= is called with =P.high_commit_qc=, which the message
   types allow to be absent; =advance_round_qc= reads =qc.vote_info.round=
   unguarded. Guarded in =safety.go:safeToExtend=, =safeToTimeout=,
-  =core.go:processCertificateQC= and =types.go:QCRound= respectively.
+  =core.go:processCertificateQC= and =proto/diempb/methods.go:Round=
+  respectively.
 - =local_timeout_round= does not test =make_timeout='s result before building a
   message around it, although the procedure is declared as returning nil on
   refusal. Guarded in =pacemaker.go:LocalTimeoutRound=.
