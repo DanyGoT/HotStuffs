@@ -67,7 +67,7 @@ then speculate and insert, then vote.
   =LeaderElection.GetLeader(round+1)=, unicast, as the paper specifies.
 - Differs :: no protocol difference. What changed is *where* authentication
   happens: signatures, quorum sizes, certificate well-formedness and signer
-  order are checked at the edge (=diemnet/server.go:Proposal=,
+  order are checked at the edge (=diemnet/server.go:VerifyInterceptor=,
   =verify.go:VerifyProposal=) before the message reaches the core. The three checks
   that remain here are the paper's own, and the leader check could not move
   anyway — =GetLeader= has a reputation path keyed on committed blocks, so a
@@ -507,8 +507,8 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   block and its certificate are =genesis.go:genesisBlock= and =genesisQC=: two
   objects, not one, because a block's id covers a QC but no certificate can name
   the genesis block before its id exists.
-- The edge verifier :: =verify.go:Verifier=, called from
-  =diemnet/server.go:Proposal=, =Vote= and =Timeout=. The paper's only
+- The edge verifier :: =verify.go:Verifier=, called from the Gorums server
+  interceptor =diemnet/server.go:VerifyInterceptor=. The paper's only
   verification hook is =valid_signatures= inside =Safety=. Splitting it out is
   what lets signature checking run on the handler goroutines, in parallel across
   senders. Two of its checks have no paper counterpart at all: =VerifyProposal=

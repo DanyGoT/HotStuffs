@@ -20,7 +20,8 @@
   recorded or reported.
 - No verified sender identity. Gorums does not tell a handler which peer sent a
   message, so this code trusts the =sender= field and checks signatures
-  (=diemnet/server.go:handler=). Fields without a signature are not covered.
+  (=diemnet/server.go:VerifyInterceptor=). Fields without a signature are not
+  covered.
   See [[https://github.com/relab/gorums/issues/325][relab/gorums#325]].
 
 * Papers
