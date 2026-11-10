@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -102,10 +103,7 @@ type peer struct {
 // letting each transport pick its own port.
 func newGroup(t *testing.T, n int, start func(*peer)) []*peer {
 	t.Helper()
-	srvs, stop, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(insecureDial))
-	if err != nil {
-		t.Fatal(err)
-	}
+	srvs, rejected, stop := localServers(t, n, signer(t, 1, n))
 	t.Cleanup(stop)
 
 	peers := make([]*peer, n)
@@ -115,7 +113,7 @@ func newGroup(t *testing.T, n int, start func(*peer)) []*peer {
 		peers[i] = &peer{
 			id: id,
 			tr: New(Config{
-				ID: id, Server: srvs[i],
+				ID: id, Server: srvs[i], Rejected: rejected,
 				Verifier: diem.NewVerifier(signer(t, id, n), diem.QuorumSize(n)),
 			}),
 			q: q,
@@ -138,6 +136,20 @@ func newGroup(t *testing.T, n int, start func(*peer)) []*peer {
 		}
 	}
 	return peers
+}
+
+// localServers is n Gorums local servers sharing one VerifyInterceptor over
+// c's keys, with the counter it rejects into.
+func localServers(t *testing.T, n int, c diem.Crypto) ([]*gorums.Server, *atomic.Uint64, func()) {
+	t.Helper()
+	rejected := new(atomic.Uint64)
+	verify := VerifyInterceptor(diem.NewVerifier(c, diem.QuorumSize(n)), rejected)
+	srvs, stop, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(insecureDial),
+		gorums.WithLocalServerOptions(gorums.WithServerInterceptors(verify)))
+	if err != nil {
+		t.Fatalf("NewLocalServers: %v", err)
+	}
+	return srvs, rejected, stop
 }
 
 // sig signs digest as signer and wraps the result as a proto Signature.
@@ -282,73 +294,141 @@ func TestVoteToUnknownReplicaIsDropped(t *testing.T) {
 	}
 }
 
-// TestHandlerRejectsMalformed drives the handler directly, with no server
-// involved. Each row is verifier-rejected, and each must increment rejected
-// without reaching the core, which this handler does not have. This is the
-// test that shows the transport boundary is the security boundary.
-func TestHandlerRejectsMalformed(t *testing.T) {
+// TestForgedNeverReachesTheHandler sends a forged proposal and then the real
+// one from the same sender. Gorums keeps one sender's requests in order, so the
+// first message a handler sees is the real one only if the forgery was dropped
+// in front of it. It covers a server New builds and one from NewLocalServers.
+func TestForgedNeverReachesTheHandler(t *testing.T) {
+	alone := func(t *testing.T) []*peer {
+		p := &peer{id: 1, q: make(chan any, 8), tr: New(Config{
+			ID: 1, Listen: "127.0.0.1:0",
+			Peers:    map[uint32]string{1: "127.0.0.1:0"},
+			Verifier: diem.NewVerifier(signer(t, 1, 1), diem.QuorumSize(1)),
+		})}
+		t.Cleanup(p.tr.Stop)
+		record(p)
+		return []*peer{p}
+	}
+	group := func(t *testing.T) []*peer { return newGroup(t, 4, record) }
+
+	for _, tc := range []struct {
+		name  string
+		peers func(*testing.T) []*peer
+	}{
+		{"server built by New", alone},
+		{"server from NewLocalServers", group},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			peers := tc.peers(t)
+			n := len(peers)
+			proposal, _, _ := round1(t, 1, n)
+			forged := proto.Clone(proposal).(*diempb.ProposalMsg)
+			forged.SetSig(diempb.Signature_builder{Signer: 1, Sig: []byte("forged")}.Build())
+
+			peers[0].tr.Proposal(forged)
+			peers[0].tr.Proposal(proposal)
+			for i, p := range peers {
+				if m, _ := recv(t, p.q).(proto.Message); !proto.Equal(m, proposal) {
+					t.Errorf("replica %d: first message is not the real proposal", i+1)
+				}
+			}
+			// A local group shares one counter, so every replica reports all n.
+			for i, p := range peers {
+				if got := p.tr.Counters().Rejected; got != uint64(n) {
+					t.Errorf("replica %d: Rejected = %d, want %d", i+1, got, n)
+				}
+			}
+		})
+	}
+}
+
+// TestVerifyInterceptor drives the interceptor directly, with no server
+// involved. A rejected message must be counted and must not reach the next
+// handler, and a valid one, or a request it does not verify, must pass. This
+// is the test that shows the transport boundary is the security boundary.
+func TestVerifyInterceptor(t *testing.T) {
 	const n = 4
-	h := &handler{ver: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n))}
+	var rejected atomic.Uint64
+	verify := VerifyInterceptor(diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)), &rejected)
 	proposal, vote, timeout := round1(t, 1, n)
 
 	forged := diempb.Signature_builder{Signer: 1, Sig: []byte("forged")}.Build()
 
 	steps := []struct {
 		name string
-		run  func()
+		msg  func() proto.Message
+		pass bool
 	}{
-		{"proposal with no block", func() {
-			h.Proposal(gorums.ServerContext{}, diempb.ProposalMsg_builder{Sender: 1, Sig: forged}.Build())
-		}},
-		{"proposal whose signature does not verify", func() {
+		{"proposal with no block", func() proto.Message {
+			return diempb.ProposalMsg_builder{Sender: 1, Sig: forged}.Build()
+		}, false},
+		{"proposal whose signature does not verify", func() proto.Message {
 			in := proto.Clone(proposal).(*diempb.ProposalMsg)
 			in.SetSig(forged)
-			h.Proposal(gorums.ServerContext{}, in)
-		}},
-		{"proposal whose sender is not its signer", func() {
+			return in
+		}, false},
+		{"proposal whose sender is not its signer", func() proto.Message {
 			in := proto.Clone(proposal).(*diempb.ProposalMsg)
 			in.SetSender(2)
-			h.Proposal(gorums.ServerContext{}, in)
-		}},
-		{"vote whose signature does not verify", func() {
+			return in
+		}, false},
+		{"vote whose signature does not verify", func() proto.Message {
 			in := proto.Clone(vote).(*diempb.VoteMsg)
 			in.SetSig(forged)
-			h.Vote(gorums.ServerContext{}, in)
-		}},
-		{"vote whose vote info was swapped behind the hash", func() {
+			return in
+		}, false},
+		{"vote whose vote info was swapped behind the hash", func() proto.Message {
 			in := proto.Clone(vote).(*diempb.VoteMsg)
 			in.GetVoteInfo().SetRound(99)
-			h.Vote(gorums.ServerContext{}, in)
-		}},
-		{"timeout with no tmo info", func() {
-			h.Timeout(gorums.ServerContext{}, diempb.TimeoutMsg_builder{}.Build())
-		}},
-		{"timeout whose signature does not verify", func() {
+			return in
+		}, false},
+		{"timeout with no tmo info", func() proto.Message {
+			return diempb.TimeoutMsg_builder{}.Build()
+		}, false},
+		{"timeout whose signature does not verify", func() proto.Message {
 			in := proto.Clone(timeout).(*diempb.TimeoutMsg)
 			in.GetTmoInfo().SetSig(forged)
-			h.Timeout(gorums.ServerContext{}, in)
-		}},
+			return in
+		}, false},
+		{"valid proposal", func() proto.Message { return proto.Clone(proposal) }, true},
+		{"valid vote", func() proto.Message { return proto.Clone(vote) }, true},
+		{"valid timeout", func() proto.Message { return proto.Clone(timeout) }, true},
+		{"block request", func() proto.Message { return diempb.BlockHash_builder{}.Build() }, true},
 	}
 
 	for _, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
-			before := h.rejected.Load()
-			step.run()
-			if got := h.rejected.Load(); got != before+1 {
-				t.Errorf("rejected = %d, want %d", got, before+1)
+			before := rejected.Load()
+			passed := false
+			next := func(gorums.ServerContext, *gorums.Message) (*gorums.Message, error) {
+				passed = true
+				return nil, nil
+			}
+			if _, err := verify(gorums.ServerContext{}, &gorums.Message{Proto: step.msg()}, next); err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if passed != step.pass {
+				t.Errorf("reached the handler = %v, want %v", passed, step.pass)
+			}
+			want := before
+			if !step.pass {
+				want++
+			}
+			if got := rejected.Load(); got != want {
+				t.Errorf("rejected = %d, want %d", got, want)
 			}
 		})
 	}
 }
 
-// TestHandlerAcceptsWellFormed is the other half of the boundary: well-formed
-// messages of each type must reach the core, and each shows in its state. The
-// proposal leaves its block in the tree, a quorum of timeouts moves the core to
-// round 2 on a TC, and then a quorum of votes for the proposal forms a QC.
+// TestHandlerAcceptsWellFormed: well-formed messages of each type must reach
+// the core, and each shows in its state. The proposal leaves its block in the
+// tree, a quorum of timeouts moves the core to round 2 on a TC, and then a
+// quorum of votes for the proposal forms a QC.
 func TestHandlerAcceptsWellFormed(t *testing.T) {
 	const n = 4
 	core, mu := newCore(t, 2)
-	h := &handler{ver: diem.NewVerifier(signer(t, 2, n), diem.QuorumSize(n)), core: core, mu: mu}
+	h := &handler{core: core, mu: mu}
 	state := func() diem.State {
 		mu.Lock()
 		defer mu.Unlock()
@@ -378,10 +458,6 @@ func TestHandlerAcceptsWellFormed(t *testing.T) {
 	}
 	if got := state().HighQCRound; got != 1 {
 		t.Errorf("high QC round = %d after a quorum of votes, want 1", got)
-	}
-
-	if got := h.rejected.Load(); got != 0 {
-		t.Errorf("rejected = %d, want 0", got)
 	}
 }
 
@@ -558,16 +634,12 @@ func (n *node) log() []*diempb.Block {
 // a real ECDSA key.
 func newCluster(t *testing.T, n int) []*node {
 	t.Helper()
-	srvs, stopSrvs, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(insecureDial))
-	if err != nil {
-		t.Fatalf("NewLocalServers: %v", err)
-	}
-	t.Cleanup(stopSrvs)
-
 	privs, pubs, err := crypto.GenerateKeys(n)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
+	srvs, rejected, stopSrvs := localServers(t, n, crypto.New(nil, pubs))
+	t.Cleanup(stopSrvs)
 	validators := make([]uint32, n)
 	for i := range n {
 		validators[i] = uint32(i + 1)
@@ -581,7 +653,7 @@ func newCluster(t *testing.T, n int) []*node {
 		ledger := diem.NewMemLedger()
 		ledger.OnCommit = func(b *diempb.Block) { nd.commits = append(nd.commits, b) }
 		nd.tr = New(Config{
-			ID: id, Server: srvs[i],
+			ID: id, Server: srvs[i], Rejected: rejected,
 			Verifier: diem.NewVerifier(signer, diem.QuorumSize(n)),
 		})
 		nd.core = diem.New(diem.Config{

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/crypto"
 	"github.com/DanyGoT/HotStuffs/diem"
+	"github.com/DanyGoT/HotStuffs/diemnet"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/relab/gorums"
 	"github.com/relab/gorums/benchkit"
@@ -45,16 +47,18 @@ func waitFor(timeout time.Duration, pred func() bool) bool {
 func cluster(t *testing.T, n int, round time.Duration) ([]*Replica, func(context.Context)) {
 	t.Helper()
 
-	srvs, stopSrvs, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(insecureDial))
-	if err != nil {
-		t.Fatalf("NewLocalServers: %v", err)
-	}
-	t.Cleanup(stopSrvs)
-
 	privs, pubs, err := crypto.GenerateKeys(n)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
+	rejected := new(atomic.Uint64)
+	verify := diemnet.VerifyInterceptor(diem.NewVerifier(crypto.New(nil, pubs), diem.QuorumSize(n)), rejected)
+	srvs, stopSrvs, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(insecureDial),
+		gorums.WithLocalServerOptions(gorums.WithServerInterceptors(verify)))
+	if err != nil {
+		t.Fatalf("NewLocalServers: %v", err)
+	}
+	t.Cleanup(stopSrvs)
 
 	reps := make([]*Replica, n)
 	for i := range n {
@@ -67,6 +71,7 @@ func cluster(t *testing.T, n int, round time.Duration) ([]*Replica, func(context
 			RoundTimeout: round,
 			Measure:      benchkit.Options{Interval: round},
 			Server:       srvs[i],
+			Rejected:     rejected,
 		})
 	}
 

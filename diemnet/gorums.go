@@ -36,8 +36,10 @@ type Config struct {
 	// Server, if set, is used instead of creating one, and Listen, Peers,
 	// DialOptions and ServerOptions are then ignored. That is how
 	// gorums.NewLocalServers is used: WithPeers needs every peer address before
-	// any server exists, so the listeners have to be allocated first.
-	Server *gorums.Server
+	// any server exists, so the listeners have to be allocated first. The
+	// caller installs VerifyInterceptor on it, counting into Rejected.
+	Server   *gorums.Server
+	Rejected *atomic.Uint64
 }
 
 // call performs one outbound Gorums call against the peer configuration. It
@@ -63,9 +65,11 @@ func (a peerAddr) Addr() string { return string(a) }
 // RequestBlock is the one call with a reply, and an addition: DiemBFT §3
 // defines no block-sync. It lets a replica that lost a proposal vote again.
 type Transport struct {
-	srv     *gorums.Server
-	handler *handler
-	out     chan call
+	srv      *gorums.Server
+	handler  *handler
+	ver      *diem.Verifier
+	rejected *atomic.Uint64
+	out      chan call
 
 	// nodes indexes the peer configuration by replica ID for unicast. It is
 	// written and read only by the sender goroutine, so it needs no lock.
@@ -92,6 +96,9 @@ func New(cfg Config) *Transport {
 	// works literally. A leader's own proposal returns as a normal inbound
 	// message, which is what lets Core treat every message the same way whoever
 	// sent it.
+	if cfg.Rejected == nil {
+		cfg.Rejected = new(atomic.Uint64)
+	}
 	srv := cfg.Server
 	if srv == nil {
 		peers := make(map[uint32]peerAddr, len(cfg.Peers))
@@ -101,15 +108,18 @@ func New(cfg Config) *Transport {
 		srv = gorums.NewServer(append([]gorums.ServerOption{
 			gorums.WithAddr(cfg.Listen),
 			gorums.WithPeers(uint32(cfg.ID), gorums.WithNodes(peers), cfg.DialOptions...),
+			gorums.WithServerInterceptors(VerifyInterceptor(cfg.Verifier, cfg.Rejected)),
 		}, cfg.ServerOptions...)...)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Transport{
-		srv:     srv,
-		handler: &handler{ver: cfg.Verifier},
-		out:     make(chan call, cfg.OutQueue),
-		ctx:     ctx,
-		cancel:  cancel,
+		srv:      srv,
+		handler:  &handler{},
+		ver:      cfg.Verifier,
+		rejected: cfg.Rejected,
+		out:      make(chan call, cfg.OutQueue),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -193,7 +203,7 @@ func (t *Transport) fetch(cfg gorums.Config, id []byte) {
 	defer cancel()
 	req := diempb.BlockHash_builder{Id: id}.Build()
 	for r := range diempb.RequestBlock(cfg.Context(ctx), req).Results().IgnoreErrors() {
-		if t.handler.ver.VerifyBlock(r.Value, id) {
+		if t.ver.VerifyBlock(r.Value, id) {
 			t.handler.block(r.Value)
 			return
 		}
@@ -267,6 +277,6 @@ type Counters struct {
 func (t *Transport) Counters() Counters {
 	return Counters{
 		OutboundDropped: t.dropped.Load(),
-		Rejected:        t.handler.rejected.Load(),
+		Rejected:        t.rejected.Load(),
 	}
 }
