@@ -43,8 +43,7 @@ type Config struct {
 }
 
 // call performs one outbound Gorums call against the peer configuration. It
-// runs on the sender goroutine, which is also where a unicast's node lookup
-// happens.
+// runs on the sender goroutine.
 type call func(gorums.Config)
 
 // peerAddr adapts a plain address to gorums.NodeAddress.
@@ -70,10 +69,6 @@ type Transport struct {
 	ver      *diem.Verifier
 	rejected *atomic.Uint64
 	out      chan call
-
-	// nodes indexes the peer configuration by replica ID for unicast. It is
-	// written and read only by the sender goroutine, so it needs no lock.
-	nodes map[uint32]*gorums.Node
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -174,7 +169,7 @@ func (t *Transport) Proposal(p *diempb.ProposalMsg) {
 // is the only replica that will propose over the certificate these votes form.
 func (t *Transport) Vote(v *diempb.VoteMsg, to uint32) {
 	t.enqueue(func(cfg gorums.Config) {
-		node := t.node(cfg, to)
+		node := cfg.Node(to)
 		if node == nil {
 			t.dropped.Add(1)
 			return
@@ -208,23 +203,6 @@ func (t *Transport) fetch(cfg gorums.Config, id []byte) {
 			return
 		}
 	}
-}
-
-// node resolves a replica ID to the Gorums node to unicast to, indexing the
-// peer configuration on first use.
-//
-// GORUMS: Config offers Nodes() and Node.ID() but no Node(id) accessor, so an
-// ID-addressed send would otherwise scan the whole configuration once per vote
-// — the protocol's most frequent message. The peer set is fixed when the server
-// is built, so one index serves the whole run.
-func (t *Transport) node(cfg gorums.Config, id uint32) *gorums.Node {
-	if t.nodes == nil {
-		t.nodes = make(map[uint32]*gorums.Node, cfg.Size())
-		for _, n := range cfg.Nodes() {
-			t.nodes[n.ID()] = n
-		}
-	}
-	return t.nodes[id]
 }
 
 // enqueue never blocks: an outbound message is dropped rather than delayed,
