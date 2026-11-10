@@ -32,7 +32,7 @@ diem/
   fakes_test.go    stand-in signer and hand-driven clock for the tests
 
 diemnet/           the Gorums layer; may import Gorums and protobuf
-  gorums.go        the Transport: outbound calls, bounded dropping send queue
+  gorums.go        the Transport: outbound calls into Gorums' send queues
   server.go        inbound handlers; verifies at the edge, then calls the
                    core under the replica's lock
 

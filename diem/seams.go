@@ -7,9 +7,9 @@ import (
 )
 
 // Transport is the outbound half of the network. Every method is safe to call
-// inside a core call, never blocks, and returns no error: a BFT
-// replica cannot act on a send failure, and the round timer is the recovery
-// mechanism.
+// inside a core call and returns no error: a BFT replica cannot act on a send
+// failure, and the round timer is the recovery mechanism. A method returns once
+// the message is queued, and blocks only while a recipient's queue is full.
 type Transport interface {
 	// Proposal sends to all replicas, this one included.
 	Proposal(*diempb.ProposalMsg)
