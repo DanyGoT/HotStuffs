@@ -48,7 +48,7 @@ func newTestPacemaker(t *testing.T, n int) (*Pacemaker, *fakeClock, *recordNet) 
 // replica sender's own Safety.MakeTimeout output.
 func timeoutInfoFrom(t *testing.T, sender uint32, n int, round, highQCRound uint64) *diempb.TimeoutInfo {
 	t.Helper()
-	sig, err := newTestSigner(n).Sign(TimeoutDigest(round, highQCRound))
+	sig, err := newTestSigner(n).Sign(diempb.TimeoutDigest(round, highQCRound))
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}

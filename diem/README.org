@@ -26,7 +26,8 @@ diem/
                    proto/diempb/methods.go
   seams.go         Transport, Crypto and Clock: what the core plugs into
   quorum.go        Faulty(n), QuorumSize(n)
-  hash.go          domain-separated digests, over plain byte slices
+  hash.go          ExecuteHash, the default execution; the message digests
+                   are methods in proto/diempb/hash.go
   genesis.go       the fixed genesis block and its certificate
   sim_test.go      the deterministic multi-replica harness
   fakes_test.go    stand-in signer and hand-driven clock for the tests

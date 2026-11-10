@@ -111,7 +111,7 @@ func (t *BlockTree) ProcessVote(v *diempb.VoteMsg) *diempb.QuorumCert {
 	if _, voted := t.voters[vk]; voted {
 		return nil
 	}
-	idx := string(LedgerCommitDigest(v.GetLedgerCommitInfo()))
+	idx := string(v.GetLedgerCommitInfo().Digest())
 	b := t.votes[idx]
 	if b == nil {
 		b = &voteBucket{voteInfo: v.GetVoteInfo(), commit: v.GetLedgerCommitInfo()}
@@ -123,23 +123,23 @@ func (t *BlockTree) ProcessVote(v *diempb.VoteMsg) *diempb.QuorumCert {
 		return nil
 	}
 
-	sigs := canonical(b.sigs)
+	qc := diempb.QuorumCert_builder{
+		VoteInfo:         b.voteInfo,
+		LedgerCommitInfo: b.commit,
+		Signatures:       canonical(b.sigs),
+		Author:           t.id,
+	}.Build()
 	// The author signature certifies nothing the quorum does not. It names who
 	// assembled this particular set, which is what an equivocating aggregator
 	// can then be held to. Every receiver checks it, so a certificate that
 	// cannot carry one is a certificate nobody would accept.
-	authorSig, err := sign(t.crypto, t.id, qcSigsDigest(sigs))
+	authorSig, err := sign(t.crypto, t.id, qc.SigsDigest())
 	if err != nil {
 		return nil
 	}
+	qc.SetAuthorSig(authorSig)
 	delete(t.votes, idx) // the certificate exists; further votes for it are dead weight
-	return diempb.QuorumCert_builder{
-		VoteInfo:         b.voteInfo,
-		LedgerCommitInfo: b.commit,
-		Signatures:       sigs,
-		Author:           t.id,
-		AuthorSig:        authorSig,
-	}.Build()
+	return qc
 }
 
 // GenerateBlock is the paper's generate_block: a block for round over the

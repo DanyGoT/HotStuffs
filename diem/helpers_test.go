@@ -26,7 +26,7 @@ func voteInfo(id []byte, round uint64, parent []byte, parentRound uint64) *diemp
 func commitInfo(commitState []byte, vi *diempb.VoteInfo) *diempb.LedgerCommitInfo {
 	return diempb.LedgerCommitInfo_builder{
 		CommitStateId: orZero(commitState),
-		VoteInfoHash:  VoteInfoHash(vi),
+		VoteInfoHash:  vi.Hash(),
 	}.Build()
 }
 
@@ -58,4 +58,9 @@ func orZero(h []byte) []byte {
 		return zeroHash[:]
 	}
 	return h
+}
+
+// blockID is the id of a block with these fields.
+func blockID(author uint32, round uint64, payload [][]byte, qc *diempb.QuorumCert) []byte {
+	return diempb.Block_builder{Author: author, Round: round, Payload: payload, Qc: qc}.Build().ComputeID()
 }

@@ -25,7 +25,7 @@ func castVote(sender uint32, vi *diempb.VoteInfo, commit *diempb.LedgerCommitInf
 		VoteInfo:         vi,
 		LedgerCommitInfo: commit,
 		Sender:           sender,
-		Sig:              signAs(sender, LedgerCommitDigest(commit)),
+		Sig:              signAs(sender, commit.Digest()),
 	}.Build()
 }
 
@@ -338,7 +338,7 @@ func TestProcessQCCommitPrunesBelowRootAndAbandonedBranches(t *testing.T) {
 	if _, ok := ledger.CommittedBlock(b1.GetId()); !ok {
 		t.Error("the new root was never committed")
 	}
-	if _, ok := tree.votes[string(LedgerCommitDigest(forkCommit))]; ok {
+	if _, ok := tree.votes[string(forkCommit.Digest())]; ok {
 		t.Error("a vote bucket at or below the new root's round survived pruning")
 	}
 }

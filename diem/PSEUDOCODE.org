@@ -179,7 +179,7 @@ The paper defines the message types here as well as the module. Those first.
   =Higher=, which is the paper's =max_round{}=.
 - =Block= :: =diem.proto:Block=, built by =types.go:NewBlock=; the id formula
   =hash(author || round || payload || qc.vote_info.id || qc.signatures)= is
-  =hash.go:blockID=.
+  =proto/diempb/hash.go:ComputeID=.
 - =TimeoutInfo= :: =diem.proto:TimeoutInfo=.
 - =TC= :: =diem.proto:TimeoutCert=, plus
   =proto/diempb/methods.go:MaxHighQCRound=, the paper's
@@ -220,8 +220,8 @@ Process the vote's commit certificate, bucket the vote by the digest of its
 =LedgerCommitInfo=, and return a QC once a bucket reaches quorum.
 
 - Implemented :: =blocktree.go:ProcessVote=; the author signature is produced
-  there over =hash.go:qcSigsDigest=, and checked on receipt inside
-  =verify.go:VerifyQC=.
+  there over =proto/diempb/hash.go:SigsDigest=, and checked on receipt
+  inside =verify.go:VerifyQC=.
 - Differs :: three things.
   1. The paper accumulates a *set union over signatures*. With a randomised
      signature scheme two signatures by one replica differ byte for byte, so
@@ -242,7 +242,7 @@ Process the vote's commit certificate, bucket the vote by the digest of its
 A block for the current round over the highest certificate known.
 
 - Implemented :: =blocktree.go:GenerateBlock=, over =types.go:NewBlock= and
-  =hash.go:blockID=.
+  =proto/diempb/hash.go:ComputeID=.
 - Faithful :: no deviation.
 
 * 3.4 Safety
@@ -330,7 +330,8 @@ build the =VoteInfo= and =LedgerCommitInfo= and sign the latter.
 Re-verify, apply =safe_to_timeout=, raise =highest_vote_round= to stop voting
 in the round, and sign =(round, high_qc.round)=.
 
-- Implemented :: =safety.go:MakeTimeout=; the digest is =hash.go:TimeoutDigest=.
+- Implemented :: =safety.go:MakeTimeout=; the digest is
+  =proto/diempb/hash.go:TimeoutDigest=.
 - Faithful :: no deviation.
 
 ** valid_signatures(b, last_tc)
@@ -523,10 +524,10 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   =pacemaker.go:ProcessRemoteTimeout=, the strict-increase and
   every-signature-valid checks in =verify.go:verifyCert= and =VerifyTC=, and the
   low-s form in =crypto/ecdsa.go:Sign= and =Verify=. A block id hashes its
-  parent certificate's signatures byte for byte (=hash.go:blockID=). If the
-  same quorum could be reordered, padded with junk or re-encoded, it would
-  yield many valid block ids, and each would enter the block tree and the
-  speculation tree.
+  parent certificate's signatures byte for byte
+  (=proto/diempb/hash.go:ComputeID=). If the same quorum could be reordered,
+  padded with junk or re-encoded, it would yield many valid block ids, and each
+  would enter the block tree and the speculation tree.
 - The round bounds :: =core.go:maxRoundLead= and the previous-round floor,
   both applied in =OnVote=. The paper puts no limit on how far ahead
   or behind a vote's round may be.
@@ -553,10 +554,11 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   =electReputationLeader='s termination guard exists for.
 - The seams :: =seams.go:Transport=, where the paper writes "send" and
   "broadcast", plus =Crypto= and =Clock=, which the paper assumes.
-- Domain-separated digests :: =hash.go:domainBlock=, =domainVoteInfo=,
-  =domainLedgerCommit=, =domainTimeout=, =domainQCSigs= and =domainState=. The
-  paper writes =hash()=. Six distinct tags keep a vote signature from ever
-  verifying as a timeout signature, or either as a block id.
+- Domain-separated digests :: =proto/diempb/hash.go:domainBlock=,
+  =domainVoteInfo=, =domainLedgerCommit=, =domainTimeout= and =domainQCSigs=,
+  plus =hash.go:domainState=. The paper writes =hash()=. Six distinct tags keep
+  a vote signature from ever verifying as a timeout signature, or either as a
+  block id.
 - Observability :: =core.go:State=, the snapshot type and its accessor.
 - MemPool ingress :: =mempool.go:Add=.
 
