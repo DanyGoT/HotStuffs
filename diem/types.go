@@ -17,11 +17,12 @@ var zeroHash [hashLen]byte
 // NewBlock builds a block and fills its id, the digest the core trusts from
 // then on.
 func NewBlock(author uint32, round uint64, payload [][]byte, qc *diempb.QuorumCert) *diempb.Block {
-	return diempb.Block_builder{
+	b := diempb.Block_builder{
 		Author:  author,
 		Round:   round,
 		Payload: payload,
 		Qc:      qc,
-		Id:      blockID(author, round, payload, qc),
 	}.Build()
+	b.SetId(b.ComputeID())
+	return b
 }

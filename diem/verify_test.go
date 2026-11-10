@@ -53,13 +53,13 @@ func TestVerifyRejectsNonCanonicalCertificates(t *testing.T) {
 		pad  *diempb.Signature
 		want bool
 	}{
-		"valid":   {signAs(4, LedgerCommitDigest(commitInfo(nil, vi))), true},
+		"valid":   {signAs(4, commitInfo(nil, vi).Digest()), true},
 		"invalid": {diempb.Signature_builder{Signer: 4, Sig: []byte{0xff}}.Build(), false},
 	} {
 		t.Run("QC signatures padded with a fourth signer, "+name, func(t *testing.T) {
 			qc := makeQC(vi, nil, 1, 2, 3)
 			qc.SetSignatures(append(qc.GetSignatures(), tt.pad))
-			qc.SetAuthorSig(signAs(qc.GetAuthor(), qcSigsDigest(qc.GetSignatures())))
+			qc.SetAuthorSig(signAs(qc.GetAuthor(), qc.SigsDigest()))
 			if got := v.VerifyQC(qc); got != tt.want {
 				t.Errorf("VerifyQC = %v, want %v", got, tt.want)
 			}
@@ -166,9 +166,9 @@ func TestVerifyTC(t *testing.T) {
 
 	t.Run("duplicate signers rejected", func(t *testing.T) {
 		tc := tcOf(5,
-			tcVote(3, signAs(1, TimeoutDigest(5, 3))),
-			tcVote(3, signAs(1, TimeoutDigest(5, 3))),
-			tcVote(4, signAs(2, TimeoutDigest(5, 4))))
+			tcVote(3, signAs(1, diempb.TimeoutDigest(5, 3))),
+			tcVote(3, signAs(1, diempb.TimeoutDigest(5, 3))),
+			tcVote(4, signAs(2, diempb.TimeoutDigest(5, 4))))
 		if v.VerifyTC(tc) {
 			t.Error("VerifyTC = true with a duplicate signer, want false")
 		}
@@ -176,9 +176,9 @@ func TestVerifyTC(t *testing.T) {
 
 	t.Run("wrong-digest signature rejected", func(t *testing.T) {
 		tc := tcOf(5,
-			tcVote(3, signAs(1, TimeoutDigest(5, 3))),
-			tcVote(4, signAs(2, TimeoutDigest(99, 4))), // signed a different round
-			tcVote(5, signAs(3, TimeoutDigest(5, 5))))
+			tcVote(3, signAs(1, diempb.TimeoutDigest(5, 3))),
+			tcVote(4, signAs(2, diempb.TimeoutDigest(99, 4))), // signed a different round
+			tcVote(5, signAs(3, diempb.TimeoutDigest(5, 5))))
 		if v.VerifyTC(tc) {
 			t.Error("VerifyTC = true with a signature over the wrong digest, want false")
 		}
@@ -338,7 +338,7 @@ func TestVerifyQCRejectsUnattributedAuthor(t *testing.T) {
 			qc.SetAuthor(2)
 		},
 		"author signature covers a different signature set": func(qc *diempb.QuorumCert) {
-			qc.SetAuthorSig(signAs(qc.GetAuthor(), qcSigsDigest(makeQC(vi, nil, 2, 3, 4).GetSignatures())))
+			qc.SetAuthorSig(signAs(qc.GetAuthor(), makeQC(vi, nil, 2, 3, 4).SigsDigest()))
 		},
 	}
 	for name, break_ := range tamper {
@@ -383,7 +383,7 @@ func TestVerifyTimeoutRejects(t *testing.T) {
 			m.GetTmoInfo().SetSender(4)
 		},
 		"signature covers a different round": func(m *diempb.TimeoutMsg) {
-			m.GetTmoInfo().SetSig(signAs(m.GetTmoInfo().GetSender(), TimeoutDigest(9, 0)))
+			m.GetTmoInfo().SetSig(signAs(m.GetTmoInfo().GetSender(), diempb.TimeoutDigest(9, 0)))
 		},
 		"high QC is forged": func(m *diempb.TimeoutMsg) {
 			m.GetTmoInfo().SetHighQc(bareQC(hashOf(0x99), 5))
@@ -422,7 +422,7 @@ func TestVerifyRejectsMalformed(t *testing.T) {
 	reVote := func(vi *diempb.VoteInfo, commit *diempb.LedgerCommitInfo) *diempb.VoteMsg {
 		return diempb.VoteMsg_builder{
 			VoteInfo: vi, LedgerCommitInfo: commit, Sender: 1,
-			Sig: signAs(1, LedgerCommitDigest(commit)),
+			Sig: signAs(1, commit.Digest()),
 		}.Build()
 	}
 	good := voteInfo(hashOf(1), 1, GenesisBlock().GetId(), 0)

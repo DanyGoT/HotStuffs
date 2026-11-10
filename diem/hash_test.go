@@ -13,11 +13,11 @@ import (
 // none of them may collide.
 func TestDomainSeparation(t *testing.T) {
 	digests := map[string][]byte{
-		"VoteInfoHash":       VoteInfoHash(voteInfo(nil, 0, nil, 0)),
-		"LedgerCommitDigest": LedgerCommitDigest(commitInfo(nil, voteInfo(nil, 0, nil, 0))),
-		"TimeoutDigest":      TimeoutDigest(0, 0),
-		"ExecuteHash":        ExecuteHash(zeroHash[:], nil),
-		"blockID":            blockID(0, 0, nil, bareQC(nil, 0)),
+		"VoteInfo.Hash":           voteInfo(nil, 0, nil, 0).Hash(),
+		"LedgerCommitInfo.Digest": commitInfo(nil, voteInfo(nil, 0, nil, 0)).Digest(),
+		"TimeoutDigest":           diempb.TimeoutDigest(0, 0),
+		"ExecuteHash":             ExecuteHash(zeroHash[:], nil),
+		"Block.ComputeID":         blockID(0, 0, nil, bareQC(nil, 0)),
 	}
 
 	seen := make(map[string]string, len(digests))
@@ -32,13 +32,13 @@ func TestDomainSeparation(t *testing.T) {
 
 func TestVoteInfoFieldSensitivity(t *testing.T) {
 	build := func(id byte, round uint64, parent byte, parentRound uint64, exec byte) []byte {
-		return VoteInfoHash(diempb.VoteInfo_builder{
+		return diempb.VoteInfo_builder{
 			Id:          hashOf(id),
 			Round:       round,
 			ParentId:    hashOf(parent),
 			ParentRound: parentRound,
 			ExecStateId: hashOf(exec),
-		}.Build())
+		}.Build().Hash()
 	}
 	base := build(1, 1, 2, 2, 3)
 
@@ -55,7 +55,7 @@ func TestVoteInfoFieldSensitivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if bytes.Equal(tt.got, base) {
-				t.Errorf("changing %s left VoteInfoHash unchanged", tt.name)
+				t.Errorf("changing %s left VoteInfo.Hash unchanged", tt.name)
 			}
 		})
 	}
@@ -63,10 +63,10 @@ func TestVoteInfoFieldSensitivity(t *testing.T) {
 
 func TestLedgerCommitInfoFieldSensitivity(t *testing.T) {
 	build := func(state, voteHash byte) []byte {
-		return LedgerCommitDigest(diempb.LedgerCommitInfo_builder{
+		return diempb.LedgerCommitInfo_builder{
 			CommitStateId: hashOf(state),
 			VoteInfoHash:  hashOf(voteHash),
-		}.Build())
+		}.Build().Digest()
 	}
 	base := build(1, 2)
 
@@ -80,7 +80,7 @@ func TestLedgerCommitInfoFieldSensitivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if bytes.Equal(tt.got, base) {
-				t.Errorf("changing %s left LedgerCommitDigest unchanged", tt.name)
+				t.Errorf("changing %s left LedgerCommitInfo.Digest unchanged", tt.name)
 			}
 		})
 	}
@@ -136,7 +136,7 @@ func TestNewBlockFillsItsID(t *testing.T) {
 	payload := [][]byte{[]byte("x")}
 	b := NewBlock(3, 4, payload, qc)
 	if !bytes.Equal(b.GetId(), blockID(3, 4, payload, qc)) {
-		t.Error("NewBlock id differs from blockID over the same fields")
+		t.Error("NewBlock id differs from ComputeID over the same fields")
 	}
 }
 
@@ -162,7 +162,7 @@ func TestExecuteHashOrderSensitive(t *testing.T) {
 func TestDigestsAreStable(t *testing.T) {
 	vi := voteInfo(hashOf(1), 7, hashOf(2), 6)
 	vi.SetExecStateId(hashOf(3))
-	lc := diempb.LedgerCommitInfo_builder{CommitStateId: hashOf(4), VoteInfoHash: VoteInfoHash(vi)}.Build()
+	lc := diempb.LedgerCommitInfo_builder{CommitStateId: hashOf(4), VoteInfoHash: vi.Hash()}.Build()
 	qcSigs := []*diempb.Signature{
 		diempb.Signature_builder{Signer: 1, Sig: []byte("aa")}.Build(),
 		diempb.Signature_builder{Signer: 3, Sig: []byte("b")}.Build(),
@@ -174,11 +174,11 @@ func TestDigestsAreStable(t *testing.T) {
 		got  []byte
 		want string
 	}{
-		{"VoteInfoHash", VoteInfoHash(vi), "8b092d9e1dbfbe317ba4c4fe7a21eab6da1b7500b7cd4e5a50bf145603a0987f"},
-		{"LedgerCommitDigest", LedgerCommitDigest(lc), "94b6aaa382393a904b5700b495af6cf451399eaa21cd573d7f1d050e5841d5e9"},
-		{"TimeoutDigest", TimeoutDigest(9, 4), "737fd4e1f21f28cb2d2f27cd9485f6bac182d67ef04035c0562e5e7b5e895682"},
-		{"qcSigsDigest", qcSigsDigest(qcSigs), "2384fbfc0a4460d7d9ae078019a60bc8ac338b61edf869ec72b7430f6b9bf380"},
-		{"blockID", blockID(2, 8, [][]byte{[]byte("x"), nil}, qc), "111d3a701459d73825df094c27e11bc3ec91f7a81f4fc248c5f8d55233573fcb"},
+		{"VoteInfo.Hash", vi.Hash(), "8b092d9e1dbfbe317ba4c4fe7a21eab6da1b7500b7cd4e5a50bf145603a0987f"},
+		{"LedgerCommitInfo.Digest", lc.Digest(), "94b6aaa382393a904b5700b495af6cf451399eaa21cd573d7f1d050e5841d5e9"},
+		{"TimeoutDigest", diempb.TimeoutDigest(9, 4), "737fd4e1f21f28cb2d2f27cd9485f6bac182d67ef04035c0562e5e7b5e895682"},
+		{"QuorumCert.SigsDigest", qc.SigsDigest(), "2384fbfc0a4460d7d9ae078019a60bc8ac338b61edf869ec72b7430f6b9bf380"},
+		{"Block.ComputeID", blockID(2, 8, [][]byte{[]byte("x"), nil}, qc), "111d3a701459d73825df094c27e11bc3ec91f7a81f4fc248c5f8d55233573fcb"},
 		{"ExecuteHash", ExecuteHash(hashOf(5), [][]byte{[]byte("p")}), "d631f2329d3a9190db1eac55dd53aab5ad9987a4987060c43373c0ed9201131a"},
 		{"genesis block id", GenesisBlock().GetId(), "d4b5493ae4acf6cddd60faa01f9719424a318148f4bd46c56cefb26d141bedff"},
 	}

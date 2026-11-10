@@ -46,7 +46,7 @@ func makeTC(round uint64, highQCRounds ...uint64) *diempb.TimeoutCert {
 	for i, r := range highQCRounds {
 		votes[i] = diempb.TimeoutVote_builder{
 			HighQcRound: r,
-			Sig:         signAs(uint32(i+1), TimeoutDigest(round, r)),
+			Sig:         signAs(uint32(i+1), diempb.TimeoutDigest(round, r)),
 		}.Build()
 	}
 	return diempb.TimeoutCert_builder{Round: round, Votes: votes}.Build()
@@ -56,19 +56,20 @@ func makeTC(round uint64, highQCRounds ...uint64) *diempb.TimeoutCert {
 // signed by signerIDs and assembled by the first of them.
 func makeQC(vi *diempb.VoteInfo, commitStateID []byte, signerIDs ...uint32) *diempb.QuorumCert {
 	commit := commitInfo(commitStateID, vi)
-	digest := LedgerCommitDigest(commit)
+	digest := commit.Digest()
 	sigs := make([]*diempb.Signature, len(signerIDs))
 	for i, id := range signerIDs {
 		sigs[i] = signAs(id, digest)
 	}
 	author := signerIDs[0]
-	return diempb.QuorumCert_builder{
+	qc := diempb.QuorumCert_builder{
 		VoteInfo:         vi,
 		LedgerCommitInfo: commit,
 		Signatures:       sigs,
 		Author:           author,
-		AuthorSig:        signAs(author, qcSigsDigest(sigs)),
 	}.Build()
+	qc.SetAuthorSig(signAs(author, qc.SigsDigest()))
+	return qc
 }
 
 func TestConsecutive(t *testing.T) {
@@ -254,8 +255,8 @@ func TestMakeVote(t *testing.T) {
 		if f.safety.HighestQCRound() != 1 {
 			t.Errorf("HighestQCRound = %d, want 1", f.safety.HighestQCRound())
 		}
-		if !bytes.Equal(vote.GetLedgerCommitInfo().GetVoteInfoHash(), VoteInfoHash(vote.GetVoteInfo())) {
-			t.Error("LedgerCommitInfo.VoteInfoHash does not match VoteInfoHash(vote.VoteInfo)")
+		if !bytes.Equal(vote.GetLedgerCommitInfo().GetVoteInfoHash(), vote.GetVoteInfo().Hash()) {
+			t.Error("LedgerCommitInfo.VoteInfoHash does not match vote.VoteInfo.Hash()")
 		}
 	})
 }
@@ -278,9 +279,9 @@ func TestMakeTimeout(t *testing.T) {
 		if f.safety.HighestVoteRound() != 1 {
 			t.Errorf("HighestVoteRound = %d, want 1", f.safety.HighestVoteRound())
 		}
-		digest := TimeoutDigest(to.GetRound(), to.GetHighQc().Round())
+		digest := diempb.TimeoutDigest(to.GetRound(), to.GetHighQc().Round())
 		if !verifySig(f.crypto, digest, to.GetSig()) {
-			t.Error("timeout signature does not verify against TimeoutDigest(round, highQC.Round())")
+			t.Error("timeout signature does not verify against diempb.TimeoutDigest(round, highQC.Round())")
 		}
 	})
 }

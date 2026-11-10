@@ -87,7 +87,7 @@ Terse restatement of what the DiemBFT proofs need. Code pointers are
 | block extends lower round | block.qc.round < block.round; edge check ahead of safe_to_vote | =verify.go:VerifyProposal=, =safety.go:safeToVote= |
 | QC validity | at least a quorum of distinct signers in canonical order, every signature valid, over the LedgerCommitInfo, which binds the VoteInfo hash; author signature; a commit only over a 2-chain | =verify.go:VerifyQC=, =verifyCert= |
 | TC validity | quorum of distinct signers, each over (round, own high_qc_round) | =verify.go:VerifyTC= |
-| Safety re-verifies | QC, TC and block id re-checked before signing; the author signature stays at the edge | =safety.go:validSignatures=, =validBlockID= |
+| Safety re-verifies | QC, TC and block id re-checked before signing; the author signature stays at the edge | =safety.go:validSignatures=, =MakeVote=, =proto/diempb/hash.go:ValidID= |
 | one vote per signer/round | duplicate votes cannot reach a quorum | =blocktree.go:ProcessVote= |
 | proposer is leader | proposal round = current round, sender = author = leader | =core.go:OnProposal= |
 | vote to next leader | vote unicast to leader of r+1 | =core.go:OnProposal= |

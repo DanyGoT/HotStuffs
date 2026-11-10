@@ -64,7 +64,7 @@ func (v *Verifier) VerifyQC(qc *diempb.QuorumCert) bool {
 		// replica hardcodes.
 		return proto.Equal(qc, genesisQC)
 	}
-	if !bytes.Equal(VoteInfoHash(qc.GetVoteInfo()), qc.GetLedgerCommitInfo().GetVoteInfoHash()) {
+	if !bytes.Equal(qc.GetVoteInfo().Hash(), qc.GetLedgerCommitInfo().GetVoteInfoHash()) {
 		return false
 	}
 	// DiemBFT 3.4 make_vote sets commit_state_id only for a 2-chain. The paper
@@ -73,7 +73,7 @@ func (v *Verifier) VerifyQC(qc *diempb.QuorumCert) bool {
 	if vi := qc.GetVoteInfo(); qc.GetLedgerCommitInfo().Commits() && !consecutive(vi.GetRound(), vi.GetParentRound()) {
 		return false
 	}
-	if !v.verifyCert(LedgerCommitDigest(qc.GetLedgerCommitInfo()), qc.GetSignatures()) {
+	if !v.verifyCert(qc.GetLedgerCommitInfo().Digest(), qc.GetSignatures()) {
 		return false
 	}
 	// The author signature is the paper's author_signature <- sign_u(signatures)
@@ -83,7 +83,7 @@ func (v *Verifier) VerifyQC(qc *diempb.QuorumCert) bool {
 	// attributable — the block id covers the set, so the two are different
 	// blocks.
 	return qc.GetAuthorSig().GetSigner() == qc.GetAuthor() &&
-		verifySig(v.crypto, qcSigsDigest(qc.GetSignatures()), qc.GetAuthorSig())
+		verifySig(v.crypto, qc.SigsDigest(), qc.GetAuthorSig())
 }
 
 // verifyCert checks a certificate carries at least a quorum of signers in
@@ -118,7 +118,7 @@ func (v *Verifier) VerifyTC(tc *diempb.TimeoutCert) bool {
 		if i > 0 && votes[i-1].GetSig().GetSigner() >= vote.GetSig().GetSigner() {
 			return false
 		}
-		if !verifySig(v.crypto, TimeoutDigest(tc.GetRound(), vote.GetHighQcRound()), vote.GetSig()) {
+		if !verifySig(v.crypto, diempb.TimeoutDigest(tc.GetRound(), vote.GetHighQcRound()), vote.GetSig()) {
 			return false
 		}
 	}
@@ -141,7 +141,7 @@ func (v *Verifier) VerifyProposal(p *diempb.ProposalMsg) bool {
 		return false
 	}
 	// The one recomputation of the id; the core reads GetId() from here on.
-	if !bytes.Equal(blockID(b.GetAuthor(), b.GetRound(), b.GetPayload(), b.GetQc()), b.GetId()) {
+	if !b.ValidID() {
 		return false
 	}
 	if p.GetSig().GetSigner() != p.GetSender() || !verifySig(v.crypto, b.GetId(), p.GetSig()) {
@@ -158,7 +158,7 @@ func (v *Verifier) VerifyTimeout(m *diempb.TimeoutMsg) bool {
 	}
 	t := m.GetTmoInfo()
 	if t.GetSig().GetSigner() != t.GetSender() ||
-		!verifySig(v.crypto, TimeoutDigest(t.GetRound(), t.GetHighQc().Round()), t.GetSig()) {
+		!verifySig(v.crypto, diempb.TimeoutDigest(t.GetRound(), t.GetHighQc().Round()), t.GetSig()) {
 		return false
 	}
 	return v.VerifyQC(t.GetHighQc()) && v.verifyCommitQC(m.GetHighCommitQc()) && v.VerifyTC(m.GetLastRoundTc())
@@ -171,10 +171,10 @@ func (v *Verifier) VerifyVote(m *diempb.VoteMsg) bool {
 	}
 	// The vote signs the LedgerCommitInfo alone, so the VoteInfo it ships with
 	// is only authenticated through the hash inside it.
-	if !bytes.Equal(VoteInfoHash(m.GetVoteInfo()), m.GetLedgerCommitInfo().GetVoteInfoHash()) {
+	if !bytes.Equal(m.GetVoteInfo().Hash(), m.GetLedgerCommitInfo().GetVoteInfoHash()) {
 		return false
 	}
-	if !verifySig(v.crypto, LedgerCommitDigest(m.GetLedgerCommitInfo()), m.GetSig()) {
+	if !verifySig(v.crypto, m.GetLedgerCommitInfo().Digest(), m.GetSig()) {
 		return false
 	}
 	return v.verifyCommitQC(m.GetHighCommitQc())
@@ -187,5 +187,5 @@ func (v *Verifier) verifyCommitQC(qc *diempb.QuorumCert) bool { return qc == nil
 // VerifyBlock reports whether b is the block with the given id. The id is a
 // hash over every field, so one block that passes is the block itself.
 func (v *Verifier) VerifyBlock(b *diempb.Block, id []byte) bool {
-	return bytes.Equal(b.GetId(), id) && validBlockID(b)
+	return bytes.Equal(b.GetId(), id) && b.ValidID()
 }

@@ -291,7 +291,7 @@ func fabricatedVote(from uint32, round uint64) *diempb.VoteMsg {
 		VoteInfo:         vi,
 		LedgerCommitInfo: commit,
 		Sender:           from,
-		Sig:              signAs(from, LedgerCommitDigest(commit)),
+		Sig:              signAs(from, commit.Digest()),
 	}.Build()
 }
 

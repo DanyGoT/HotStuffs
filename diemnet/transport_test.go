@@ -182,7 +182,7 @@ func round1(t *testing.T, from uint32, n int) (*diempb.ProposalMsg, *diempb.Vote
 			Round:  1,
 			HighQc: qc,
 			Sender: from,
-			Sig:    sig(t, signer, from, diem.TimeoutDigest(1, 0)),
+			Sig:    sig(t, signer, from, diempb.TimeoutDigest(1, 0)),
 		}.Build(),
 		HighCommitQc: qc,
 	}.Build()
@@ -202,14 +202,14 @@ func voteOn(t *testing.T, from uint32, n int, blk *diempb.Block) *diempb.VoteMsg
 	}.Build()
 	commit := diempb.LedgerCommitInfo_builder{
 		CommitStateId: make([]byte, 32),
-		VoteInfoHash:  diem.VoteInfoHash(voteInfo),
+		VoteInfoHash:  voteInfo.Hash(),
 	}.Build()
 	return diempb.VoteMsg_builder{
 		VoteInfo:         voteInfo,
 		LedgerCommitInfo: commit,
 		HighCommitQc:     qc,
 		Sender:           from,
-		Sig:              sig(t, signer(t, from, n), from, diem.LedgerCommitDigest(commit)),
+		Sig:              sig(t, signer(t, from, n), from, commit.Digest()),
 	}.Build()
 }
 
