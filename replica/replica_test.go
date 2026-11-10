@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,10 +43,10 @@ func waitFor(timeout time.Duration, pred func() bool) bool {
 	}
 }
 
-// cluster builds n replicas on one process's Gorums local servers
-// and returns them with a func that runs them under ctx and blocks until every
-// Run has returned.
-func cluster(t *testing.T, n int, round time.Duration) ([]*Replica, func(context.Context)) {
+// cluster builds n replicas on one process's Gorums local servers, dialing
+// with dial on top of insecureDial, and returns them with a func that runs them
+// under ctx and blocks until every Run has returned.
+func cluster(t *testing.T, n int, round time.Duration, dial ...gorums.DialOption) ([]*Replica, func(context.Context)) {
 	t.Helper()
 
 	privs, pubs, err := crypto.GenerateKeys(n)
@@ -53,7 +55,7 @@ func cluster(t *testing.T, n int, round time.Duration) ([]*Replica, func(context
 	}
 	rejected := new(atomic.Uint64)
 	verify := diemnet.VerifyInterceptor(diem.NewVerifier(crypto.New(nil, pubs), diem.QuorumSize(n)), rejected)
-	srvs, stopSrvs, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(insecureDial),
+	srvs, stopSrvs, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(append([]gorums.DialOption{insecureDial}, dial...)...),
 		gorums.WithLocalServerOptions(gorums.WithServerInterceptors(verify)))
 	if err != nil {
 		t.Fatalf("NewLocalServers: %v", err)
@@ -207,6 +209,67 @@ func TestResultCountsOwnBlocks(t *testing.T) {
 		if streamed != own {
 			t.Errorf("replica %d: interval events carry %d ops, want %d", r.ID(), streamed, own)
 		}
+	}
+}
+
+// stallStreams makes every stream stop sending, as it does when the peer stops
+// reading, until the stream closes.
+var stallStreams = gorums.WithGRPCDialOptions(grpc.WithStreamInterceptor(
+	func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		cs, err := streamer(ctx, desc, cc, method, opts...)
+		if err != nil {
+			return nil, err
+		}
+		return stalled{cs}, nil
+	}))
+
+type stalled struct{ grpc.ClientStream }
+
+func (s stalled) SendMsg(any) error {
+	<-s.Context().Done()
+	return s.Context().Err()
+}
+
+// sendsWaiting counts the goroutines waiting for space in a full Gorums send
+// queue.
+func sendsWaiting() int {
+	buf := make([]byte, 1<<20)
+	for {
+		if n := runtime.Stack(buf, true); n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	waiting := 0
+	for g := range strings.SplitSeq(string(buf), "\n\n") {
+		if strings.Contains(g, " [select") && strings.Contains(g, "(*sendQueue).push") {
+			waiting++
+		}
+	}
+	return waiting
+}
+
+// TestRunStopsWhileASendWaits stalls every stream behind a one-slot send
+// queue, so each replica's core ends up waiting for queue space with mu held.
+// Cancelling must still stop every replica.
+func TestRunStopsWhileASendWaits(t *testing.T) {
+	const n = 4
+	_, run := cluster(t, n, testRound, gorums.WithSendBufferSize(1), stallStreams)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	allDone := make(chan struct{})
+	go func() { run(ctx); close(allDone) }()
+
+	if !waitFor(10*time.Second, func() bool { return sendsWaiting() >= n }) {
+		t.Fatalf("%d sends wait for queue space, want %d", sendsWaiting(), n)
+	}
+	cancel()
+	select {
+	case <-allDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return while a send waited for queue space")
 	}
 }
 
