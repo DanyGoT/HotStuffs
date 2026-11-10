@@ -63,7 +63,7 @@ func (s *Safety) safeToExtend(blockRound, qcRound uint64, tc *diempb.TimeoutCert
 	if tc == nil {
 		return false
 	}
-	return consecutive(blockRound, tc.GetRound()) && qcRound >= MaxHighQCRound(tc)
+	return consecutive(blockRound, tc.GetRound()) && qcRound >= tc.MaxHighQCRound()
 }
 
 func (s *Safety) safeToVote(blockRound, qcRound uint64, tc *diempb.TimeoutCert) bool {
@@ -101,7 +101,7 @@ func (s *Safety) safeToTimeout(round, qcRound uint64, tc *diempb.TimeoutCert) bo
 // so the quorum that certifies this block also certifies that commit. A gap in
 // rounds commits nothing, which is the zero hash.
 func (s *Safety) commitStateIDCandidate(blockRound uint64, qc *diempb.QuorumCert) []byte {
-	if !consecutive(blockRound, QCRound(qc)) {
+	if !consecutive(blockRound, qc.Round()) {
 		return zeroHash[:]
 	}
 	state, ok := s.ledger.PendingState(qc.GetVoteInfo().GetId())
@@ -114,7 +114,7 @@ func (s *Safety) commitStateIDCandidate(blockRound uint64, qc *diempb.QuorumCert
 // MakeVote returns this replica's vote for b, or nil if the safety rules
 // refuse it. The counters move only on the path that produces a vote.
 func (s *Safety) MakeVote(b *diempb.Block, lastTC *diempb.TimeoutCert) *diempb.VoteMsg {
-	qcRound := QCRound(b.GetQc())
+	qcRound := b.GetQc().Round()
 	if !validBlockID(b) || !s.validSignatures(b.GetQc(), lastTC) || !s.safeToVote(b.GetRound(), qcRound, lastTC) {
 		return nil
 	}
@@ -135,7 +135,7 @@ func (s *Safety) MakeVote(b *diempb.Block, lastTC *diempb.TimeoutCert) *diempb.V
 	voteInfo := diempb.VoteInfo_builder{
 		Id:          b.GetId(),
 		Round:       b.GetRound(),
-		ParentId:    parentID(b),
+		ParentId:    b.ParentID(),
 		ParentRound: qcRound,
 		ExecStateId: exec,
 	}.Build()
@@ -160,7 +160,7 @@ func (s *Safety) MakeVote(b *diempb.Block, lastTC *diempb.TimeoutCert) *diempb.V
 // rules refuse it. Timing out burns the round for voting too: the counter is
 // raised before the message goes out.
 func (s *Safety) MakeTimeout(round uint64, highQC *diempb.QuorumCert, lastTC *diempb.TimeoutCert) *diempb.TimeoutInfo {
-	qcRound := QCRound(highQC)
+	qcRound := highQC.Round()
 	if !s.validSignatures(highQC, lastTC) || !s.safeToTimeout(round, qcRound, lastTC) {
 		return nil
 	}

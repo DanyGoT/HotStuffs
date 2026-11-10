@@ -58,7 +58,7 @@ func (v *Verifier) VerifyQC(qc *diempb.QuorumCert) bool {
 	if qc == nil || !validVote(qc.GetVoteInfo(), qc.GetLedgerCommitInfo()) {
 		return false
 	}
-	if QCRound(qc) == 0 {
+	if qc.Round() == 0 {
 		// Genesis carries neither a quorum nor an author signature, so nothing
 		// vouches for a round-0 certificate but equality with the one every
 		// replica hardcodes.
@@ -70,7 +70,7 @@ func (v *Verifier) VerifyQC(qc *diempb.QuorumCert) bool {
 	// DiemBFT 3.4 make_vote sets commit_state_id only for a 2-chain. The paper
 	// leaves receivers trusting the quorum on that; a commit over a round gap is
 	// refused here so a QC alone can never trigger one.
-	if vi := qc.GetVoteInfo(); Commits(qc.GetLedgerCommitInfo()) && !consecutive(vi.GetRound(), vi.GetParentRound()) {
+	if vi := qc.GetVoteInfo(); qc.GetLedgerCommitInfo().Commits() && !consecutive(vi.GetRound(), vi.GetParentRound()) {
 		return false
 	}
 	if !v.verifyCert(LedgerCommitDigest(qc.GetLedgerCommitInfo()), qc.GetSignatures()) {
@@ -130,14 +130,14 @@ func (v *Verifier) VerifyTC(tc *diempb.TimeoutCert) bool {
 // every certificate it carries holds up. Whether its author leads the round is
 // decided in Core; see the type comment.
 func (v *Verifier) VerifyProposal(p *diempb.ProposalMsg) bool {
-	if !WellFormedProposal(p) {
+	if !p.WellFormed() {
 		return false
 	}
 	b := p.GetBlock()
 	// A block must extend a round below its own. The well-formedness rule alone
 	// permits any certificate behind a TC, and safeToVote catches the rest only
 	// after the pacemaker has advanced and the block has been speculated.
-	if QCRound(b.GetQc()) >= b.GetRound() {
+	if b.GetQc().Round() >= b.GetRound() {
 		return false
 	}
 	// The one recomputation of the id; the core reads GetId() from here on.
@@ -153,12 +153,12 @@ func (v *Verifier) VerifyProposal(p *diempb.ProposalMsg) bool {
 // VerifyTimeout reports whether m is well formed and validly signed, and
 // whether every certificate it carries holds up.
 func (v *Verifier) VerifyTimeout(m *diempb.TimeoutMsg) bool {
-	if !WellFormedTimeout(m) {
+	if !m.WellFormed() {
 		return false
 	}
 	t := m.GetTmoInfo()
 	if t.GetSig().GetSigner() != t.GetSender() ||
-		!verifySig(v.crypto, TimeoutDigest(t.GetRound(), QCRound(t.GetHighQc())), t.GetSig()) {
+		!verifySig(v.crypto, TimeoutDigest(t.GetRound(), t.GetHighQc().Round()), t.GetSig()) {
 		return false
 	}
 	return v.VerifyQC(t.GetHighQc()) && v.verifyCommitQC(m.GetHighCommitQc()) && v.VerifyTC(m.GetLastRoundTc())

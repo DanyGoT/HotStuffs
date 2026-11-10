@@ -75,9 +75,9 @@ func NewMemLedger() *MemLedger {
 // three are fields of b, and committed_block must hand a whole block back,
 // so the ledger has to hold the block in any case.
 func (l *MemLedger) Speculate(b *diempb.Block) []byte {
-	prev, ok := l.PendingState(parentID(b))
+	prev, ok := l.PendingState(b.ParentID())
 	if !ok {
-		if QCRound(b.GetQc()) > l.commitRound() {
+		if b.GetQc().Round() > l.commitRound() {
 			l.held[string(b.GetId())] = b
 		}
 		return zeroHash[:]
@@ -86,7 +86,7 @@ func (l *MemLedger) Speculate(b *diempb.Block) []byte {
 	state := l.Execute(prev, b.GetPayload())
 	l.pending[id] = speculated{block: b, state: state}
 	for hid, h := range l.held {
-		if string(parentID(h)) == id {
+		if string(h.ParentID()) == id {
 			delete(l.held, hid)
 			l.Speculate(h)
 		}
@@ -102,7 +102,7 @@ func (l *MemLedger) Missing(blockID []byte) []byte {
 		return nil
 	}
 	for {
-		parent := parentID(b)
+		parent := b.ParentID()
 		if b, ok = l.held[string(parent)]; !ok {
 			return parent
 		}
@@ -136,7 +136,7 @@ func (l *MemLedger) Commit(blockID []byte) {
 			return // blockID is not a descendant of the frontier: nothing to do
 		}
 		chain = append(chain, s)
-		id = string(parentID(s.block))
+		id = string(s.block.ParentID())
 	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		s := chain[i]
@@ -165,14 +165,14 @@ func (l *MemLedger) CommittedBlock(blockID []byte) (*diempb.Block, bool) {
 // A held block goes once its parent falls to the frontier or below.
 func (l *MemLedger) prune() {
 	for id, b := range l.held {
-		if QCRound(b.GetQc()) <= l.commitRound() {
+		if b.GetQc().Round() <= l.commitRound() {
 			delete(l.held, id)
 		}
 	}
 	for changed := true; changed; {
 		changed = false
 		for id, s := range l.pending {
-			parent := string(parentID(s.block))
+			parent := string(s.block.ParentID())
 			if parent == l.commitID {
 				continue
 			}

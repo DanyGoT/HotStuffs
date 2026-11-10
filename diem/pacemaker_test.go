@@ -295,9 +295,9 @@ func TestLocalTimeoutRoundDropsRedundantTC(t *testing.T) {
 	if len(net.timeouts) != 1 {
 		t.Fatalf("broadcast %d timeouts, want 1", len(net.timeouts))
 	}
-	if m := net.timeouts[0]; !WellFormedTimeout(m) {
+	if m := net.timeouts[0]; !m.WellFormed() {
 		t.Fatalf("broadcast an ill-formed timeout: round %d over a high_qc for round %d, carrying a TC for round %d; every honest replica discards it",
-			m.GetTmoInfo().GetRound(), QCRound(m.GetTmoInfo().GetHighQc()), m.GetLastRoundTc().GetRound())
+			m.GetTmoInfo().GetRound(), m.GetTmoInfo().GetHighQc().Round(), m.GetLastRoundTc().GetRound())
 	}
 }
 

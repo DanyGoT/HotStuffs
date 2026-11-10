@@ -27,7 +27,7 @@ Terse restatement of what the DiemBFT proofs need. Code pointers are
   (setting highest_qc_round = B.round).
 - Def 2 local direct-commit: replica calls =Ledger.commit(B)= only on observing
   B <- QC_B <- B' <- QC_B' with B'.round = B.round+1
-  (=blocktree.go:ProcessQC=, =types.go:Commits=, =safety.go:commitStateIDCandidate=).
+  (=blocktree.go:ProcessQC=, =proto/diempb/methods.go:Commits=, =safety.go:commitStateIDCandidate=).
 ** Safety (Agreement)
 - Lemma 1: local direct-commit => global direct-commit.
 - Lemma 2: if B is globally direct-committed, every TC of a higher round has
@@ -82,7 +82,7 @@ Terse restatement of what the DiemBFT proofs need. Code pointers are
 | timeout burns round | after timing out of r, no vote in r (needed by Lemma 2) | =safety.go:MakeTimeout= |
 | timeout reports high_qc | timeout carries the local high_qc, signed over (round, high_qc.round) (feeds Lemma 2) | =pacemaker.go:LocalTimeoutRound=, =safety.go:MakeTimeout= |
 | 2-chain commit | commit_state_id != bottom (zero hash) only when block.round = qc.round+1; QC commits its parent | =safety.go:commitStateIDCandidate=, =blocktree.go:ProcessQC= |
-| well-formedness | round-r proposal/timeout carries TC(r-1) iff qc.round != r-1, else no TC | =types.go:wellFormed=, =core.go:justifyingTC=, =verify.go:VerifyProposal=, =VerifyTimeout= |
+| well-formedness | round-r proposal/timeout carries TC(r-1) iff qc.round != r-1, else no TC | =proto/diempb/methods.go:wellFormed=, =core.go:justifyingTC=, =verify.go:VerifyProposal=, =VerifyTimeout= |
 | block id binding | id = hash(author, round, payload, qc) recomputed on receipt | =verify.go:VerifyProposal= |
 | block extends lower round | block.qc.round < block.round; edge check ahead of safe_to_vote | =verify.go:VerifyProposal=, =safety.go:safeToVote= |
 | QC validity | at least a quorum of distinct signers in canonical order, every signature valid, over the LedgerCommitInfo, which binds the VoteInfo hash; author signature; a commit only over a 2-chain | =verify.go:VerifyQC=, =verifyCert= |
