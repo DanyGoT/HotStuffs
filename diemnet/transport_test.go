@@ -80,16 +80,6 @@ func (r *recorder) RequestBlock(gorums.ServerContext, *diempb.BlockHash) (*diemp
 // record serves p's transport with a recorder in place of a core.
 func record(p *peer) { p.tr.serve(&recorder{q: p.q}) }
 
-// drained reports whether q is empty right now.
-func drained(q chan any) bool {
-	select {
-	case <-q:
-		return false
-	default:
-		return true
-	}
-}
-
 type peer struct {
 	id uint32
 	tr *Transport
@@ -256,25 +246,27 @@ func TestMulticastReachesAll(t *testing.T) {
 func TestVoteIsUnicast(t *testing.T) {
 	const n, to = 4, uint32(3)
 	peers := newGroup(t, n, record)
-	_, vote, _ := round1(t, 1, n)
+	_, vote, timeout := round1(t, 1, n)
 
+	// The timeout marks the end: Gorums delivers one sender's messages to a
+	// replica in order, so a vote sent to a replica arrives before the timeout.
 	peers[0].tr.Vote(vote, to)
+	peers[0].tr.Timeout(timeout)
 
-	m, ok := recv(t, peers[to-1].q).(*diempb.VoteMsg)
-	if !ok {
-		t.Fatalf("replica %d: got a non-vote input", to)
-	}
-	if m.GetSender() != vote.GetSender() || !bytes.Equal(m.GetVoteInfo().GetId(), vote.GetVoteInfo().GetId()) {
-		t.Errorf("vote = %+v, want sender %d on block %x", m, vote.GetSender(), vote.GetVoteInfo().GetId())
-	}
-	// A multicast would already have delivered to the others by now, since the
-	// addressee's copy travels the same sender goroutine and the same queue.
 	for i, p := range peers {
-		if uint32(i+1) == to {
-			continue
+		m := recv(t, p.q)
+		if v, ok := m.(*diempb.VoteMsg); ok {
+			if uint32(i+1) != to {
+				t.Errorf("replica %d received a vote addressed to replica %d", i+1, to)
+			} else if v.GetSender() != vote.GetSender() || !bytes.Equal(v.GetVoteInfo().GetId(), vote.GetVoteInfo().GetId()) {
+				t.Errorf("vote = %+v, want sender %d on block %x", v, vote.GetSender(), vote.GetVoteInfo().GetId())
+			}
+			m = recv(t, p.q)
+		} else if uint32(i+1) == to {
+			t.Errorf("replica %d: got %T before the vote", to, m)
 		}
-		if !drained(p.q) {
-			t.Errorf("replica %d received a vote addressed to replica %d", i+1, to)
+		if _, ok := m.(*diempb.TimeoutMsg); !ok {
+			t.Errorf("replica %d: got %T, want the closing timeout", i+1, m)
 		}
 	}
 }
@@ -545,38 +537,6 @@ func TestRequestBlockChecksTheID(t *testing.T) {
 				t.Fatalf("the core holds %+v, want the requested block", got)
 			}
 		})
-	}
-}
-
-// TestOutboundQueueDrops never calls Start, so nothing drains the outbound
-// queue, and sends must drop rather than block.
-func TestOutboundQueueDrops(t *testing.T) {
-	const n = 1
-	tr := New(Config{
-		ID: 1, Listen: "127.0.0.1:0", OutQueue: 1,
-		// This replica's own ID resolves to an in-process node regardless of
-		// the address given, so the placeholder is never dialed.
-		Peers:    map[uint32]string{1: "127.0.0.1:0"},
-		Verifier: diem.NewVerifier(signer(t, 1, n), diem.QuorumSize(n)),
-	})
-	t.Cleanup(tr.Stop)
-	proposal, _, _ := round1(t, 1, n)
-
-	done := make(chan struct{})
-	go func() {
-		for range 5 {
-			tr.Proposal(proposal)
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(recvTimeout):
-		t.Fatal("Proposal blocked instead of dropping")
-	}
-
-	if got := tr.Counters().OutboundDropped; got == 0 {
-		t.Errorf("OutboundDropped = %d, want > 0", got)
 	}
 }
 

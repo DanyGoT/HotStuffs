@@ -16,8 +16,6 @@ import (
 	"github.com/relab/gorums"
 )
 
-const defaultOutQueue = 1024
-
 // fetchTimeout bounds one block request. A peer that holds the block answers
 // at once, so the bound only matters when none does.
 const fetchTimeout = time.Second
@@ -29,7 +27,6 @@ type Config struct {
 	Listen   string            // ":0" picks a free port; read it back with Addr
 	Verifier *diem.Verifier
 
-	OutQueue      int // outbound queue depth; 0 picks a default
 	DialOptions   []gorums.DialOption
 	ServerOptions []gorums.ServerOption
 
@@ -41,10 +38,6 @@ type Config struct {
 	Server   *gorums.Server
 	Rejected *atomic.Uint64
 }
-
-// call performs one outbound Gorums call against the peer configuration. It
-// runs on the sender goroutine.
-type call func(gorums.Config)
 
 // peerAddr adapts a plain address to gorums.NodeAddress.
 // GORUMS: WithNodes requires an Addr() string method, so a map[uint32]string
@@ -58,8 +51,13 @@ func (a peerAddr) Addr() string { return string(a) }
 // Transport is the Gorums implementation of diem.Transport, together with the
 // server that receives on the other side.
 //
-// Outbound is bounded and drops when full, because a lost message is what the
-// round timer recovers from.
+// A send goes straight into Gorums' per-node send queue, sized with
+// gorums.WithSendBufferSize, and returns once queued: Async, because Send would
+// also wait for every node's stream write. A lost message is what the round
+// timer recovers from.
+// GORUMS: a one-way call waits for space when a node's queue is full, and has
+// no variant that drops instead, so a peer that stops reading blocks the core
+// call that sends to it until its queue drains or Stop.
 //
 // RequestBlock is the one call with a reply, and an addition: DiemBFT §3
 // defines no block-sync. It lets a replica that lost a proposal vote again.
@@ -68,7 +66,6 @@ type Transport struct {
 	handler  *handler
 	ver      *diem.Verifier
 	rejected *atomic.Uint64
-	out      chan call
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -82,10 +79,6 @@ var _ diem.Transport = (*Transport)(nil)
 // New builds the Gorums server, registers the inbound handlers and returns the
 // transport over it. Nothing is served until Start.
 func New(cfg Config) *Transport {
-	if cfg.OutQueue == 0 {
-		cfg.OutQueue = defaultOutQueue
-	}
-
 	// GORUMS, in its favour: WithPeers makes this replica's own ID an in-process
 	// local node, so the paper's "broadcast to all replicas, including u itself"
 	// works literally. A leader's own proposal returns as a normal inbound
@@ -112,15 +105,13 @@ func New(cfg Config) *Transport {
 		handler:  &handler{},
 		ver:      cfg.Verifier,
 		rejected: cfg.Rejected,
-		out:      make(chan call, cfg.OutQueue),
 		ctx:      ctx,
 		cancel:   cancel,
 	}
 }
 
 // Start hands verified inbound messages to core under mu, the lock the caller
-// serializes every core call with, then serves and begins draining the
-// outbound queue. It returns immediately.
+// serializes every core call with, then serves. It returns immediately.
 func (t *Transport) Start(core *diem.Core, mu sync.Locker) {
 	t.handler.core, t.handler.mu = core, mu
 	t.serve(t.handler)
@@ -132,19 +123,13 @@ func (t *Transport) Start(core *diem.Core, mu sync.Locker) {
 // it returns — cannot be used for a replica group; -race flags it.
 func (t *Transport) serve(h diempb.DiemServer) {
 	diempb.RegisterDiemServer(t.srv, h)
-	t.wg.Add(2)
-	go func() {
-		defer t.wg.Done()
+	t.wg.Go(func() {
 		_ = t.srv.ListenAndServe() // returns when Stop closes the listener
-	}()
-	go func() {
-		defer t.wg.Done()
-		t.drain()
-	}()
+	})
 }
 
-// Stop shuts the server down and waits for the sender to finish. Stop the
-// core before calling this.
+// Stop ends every send still waiting for queue space and shuts the server
+// down. Stop the core before calling this.
 func (t *Transport) Stop() {
 	t.cancel()
 	t.srv.Stop()
@@ -162,24 +147,26 @@ func (t *Transport) WaitForPeers(ctx context.Context) error {
 }
 
 func (t *Transport) Proposal(p *diempb.ProposalMsg) {
-	t.enqueue(func(cfg gorums.Config) { _ = diempb.Proposal(cfg.Context(t.ctx), p).Send() })
+	if cfg := t.peers(); cfg != nil {
+		diempb.Proposal(cfg.Context(t.ctx), p).Async()
+	}
 }
 
 // Vote unicasts to the leader of the next round, as the paper does: that leader
 // is the only replica that will propose over the certificate these votes form.
 func (t *Transport) Vote(v *diempb.VoteMsg, to uint32) {
-	t.enqueue(func(cfg gorums.Config) {
-		node := cfg.Node(to)
-		if node == nil {
-			t.dropped.Add(1)
-			return
-		}
-		_ = diempb.Vote(node.Context(t.ctx), v).Send()
-	})
+	node := t.srv.PeerConfig().Node(to)
+	if node == nil {
+		t.dropped.Add(1)
+		return
+	}
+	diempb.Vote(node.Context(t.ctx), v).Async()
 }
 
 func (t *Transport) Timeout(m *diempb.TimeoutMsg) {
-	t.enqueue(func(cfg gorums.Config) { _ = diempb.Timeout(cfg.Context(t.ctx), m).Send() })
+	if cfg := t.peers(); cfg != nil {
+		diempb.Timeout(cfg.Context(t.ctx), m).Async()
+	}
 }
 
 // RequestBlock runs a quorum call to every peer on its own goroutine, so a slow
@@ -190,7 +177,9 @@ func (t *Transport) Timeout(m *diempb.TimeoutMsg) {
 // Stop does not wait for the goroutine, so a fetch may still be waiting for
 // the lock after it, and a stopped core ignores it.
 func (t *Transport) RequestBlock(id []byte) {
-	t.enqueue(func(cfg gorums.Config) { go t.fetch(cfg, id) })
+	if cfg := t.peers(); cfg != nil {
+		go t.fetch(cfg, id)
+	}
 }
 
 func (t *Transport) fetch(cfg gorums.Config, id []byte) {
@@ -205,41 +194,13 @@ func (t *Transport) fetch(cfg gorums.Config, id []byte) {
 	}
 }
 
-// enqueue never blocks: an outbound message is dropped rather than delayed,
-// and the drop is counted.
-func (t *Transport) enqueue(fn call) {
-	select {
-	case t.out <- fn:
-	default:
-		t.dropped.Add(1)
-	}
-}
-
-func (t *Transport) drain() {
-	for {
-		select {
-		case <-t.ctx.Done():
-			return
-		case fn := <-t.out:
-			cfg := t.peers()
-			if cfg == nil {
-				t.dropped.Add(1)
-				continue
-			}
-			// GORUMS: a one-way Send blocks once a node's send queue fills, and
-			// Async is the only alternative, so the bounded queue in front of
-			// this goroutine is what keeps a core call from blocking on a send.
-			fn(cfg)
-		}
-	}
-}
-
-// peers is the peer configuration, or nil when it is empty.
+// peers is the peer configuration, or nil, counted as a drop, when it is empty.
 // GORUMS: Config.Context panics on an empty Config, so this guard is not
 // optional — which is why it lives in exactly one place.
 func (t *Transport) peers() gorums.Config {
 	cfg := t.srv.PeerConfig()
 	if cfg.Size() == 0 {
+		t.dropped.Add(1)
 		return nil
 	}
 	return cfg
