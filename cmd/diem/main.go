@@ -21,8 +21,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/DanyGoT/HotStuffs/crypto"
+	"github.com/DanyGoT/HotStuffs/diem"
+	"github.com/DanyGoT/HotStuffs/diemnet"
 	"github.com/DanyGoT/HotStuffs/proto/diempb"
 	"github.com/DanyGoT/HotStuffs/replica"
 	"github.com/relab/gorums"
@@ -99,13 +102,17 @@ func writeKeys() error {
 // runLocal runs a whole cluster in one process. gorums.NewLocalServers
 // pre-allocates the loopback listeners and numbers the servers 1..n, which is
 // what makes this possible at all: WithPeers needs every address before any
-// server exists.
+// server exists. The replicas share one verifier, which needs only the public
+// keys, and so one reject counter.
 func runLocal(n int) error {
 	privs, pubs, err := crypto.GenerateKeys(n)
 	if err != nil {
 		return err
 	}
-	srvs, stop, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(dialOptions()...))
+	rejected := new(atomic.Uint64)
+	verify := diemnet.VerifyInterceptor(diem.NewVerifier(crypto.New(nil, pubs), diem.QuorumSize(n)), rejected)
+	srvs, stop, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(dialOptions()...),
+		gorums.WithLocalServerOptions(gorums.WithServerInterceptors(verify)))
 	if err != nil {
 		return err
 	}
@@ -120,6 +127,7 @@ func runLocal(n int) error {
 			RoundTimeout: *viewDuration,
 			Measure:      std.Options(),
 			Server:       srvs[i],
+			Rejected:     rejected,
 		})
 	}
 	return runAll(reps)

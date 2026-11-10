@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/DanyGoT/HotStuffs/crypto"
@@ -43,8 +44,10 @@ type Config struct {
 	Measure benchkit.Options
 
 	// Server, if set, is the Gorums server to run on, as gorums.NewLocalServers
-	// provides for a single-process cluster. Peers and Listen are then unused.
+	// provides for a single-process cluster. Peers and Listen are then unused,
+	// and Rejected is the counter of the diemnet.VerifyInterceptor on it.
 	Server      *gorums.Server
+	Rejected    *atomic.Uint64
 	DialOptions []gorums.DialOption
 }
 
@@ -102,6 +105,7 @@ func New(cfg Config) *Replica {
 		Listen:      cfg.Listen,
 		Verifier:    diem.NewVerifier(signer, diem.QuorumSize(len(validators))),
 		Server:      cfg.Server,
+		Rejected:    cfg.Rejected,
 		DialOptions: cfg.DialOptions,
 	})
 	r.core = diem.New(diem.Config{
