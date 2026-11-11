@@ -11,10 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/crypto"
-	"github.com/DanyGoT/HotStuffs/diem"
-	"github.com/DanyGoT/HotStuffs/diemnet"
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/crypto"
+	"github.com/DanyGoT/diembft/diem"
+	"github.com/DanyGoT/diembft/diemnet"
+	"github.com/DanyGoT/diembft/proto/diempb"
 	"github.com/relab/gorums"
 	"github.com/relab/gorums/benchkit"
 )

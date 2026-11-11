@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // Pacemaker is the paper's Pacemaker module (3.5): it advances rounds and

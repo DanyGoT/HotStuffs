@@ -3,7 +3,7 @@ package diem
 import (
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // Transport is the outbound half of the network. Every method is safe to call

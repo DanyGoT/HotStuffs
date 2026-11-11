@@ -1,6 +1,6 @@
 package diem
 
-import "github.com/DanyGoT/HotStuffs/proto/diempb"
+import "github.com/DanyGoT/diembft/proto/diempb"
 
 // Faulty is the number of Byzantine replicas a group of n tolerates.
 func Faulty(n int) int { return (n - 1) / 3 }

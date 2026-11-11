@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // newTestLeaderElection returns a LeaderElection for validators, wired to its

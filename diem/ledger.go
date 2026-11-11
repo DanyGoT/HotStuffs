@@ -3,7 +3,7 @@ package diem
 import (
 	"slices"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // MemLedger is the in-memory ledger (paper 3.2): a branching tree of

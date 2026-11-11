@@ -8,7 +8,7 @@
 // 32-byte slices, keyed in maps by string(h) and compared with bytes.Equal.
 package diem
 
-import "github.com/DanyGoT/HotStuffs/proto/diempb"
+import "github.com/DanyGoT/diembft/proto/diempb"
 
 // zeroHash is the paper's bottom: a LedgerCommitInfo carrying it as its
 // CommitStateId commits nothing.

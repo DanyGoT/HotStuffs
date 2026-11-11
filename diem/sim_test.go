@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // sim is a deterministic N-replica harness: one shared fake clock, one FIFO

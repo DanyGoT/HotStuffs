@@ -2,7 +2,7 @@ edition = "2024";
 
 package diempb;
 
-option go_package = "github.com/DanyGoT/HotStuffs/proto/diempb";
+option go_package = "github.com/DanyGoT/diembft/proto/diempb";
 option features.field_presence = IMPLICIT;
 option features.enforce_naming_style = STYLE_LEGACY;
 

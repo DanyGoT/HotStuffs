@@ -1,6 +1,6 @@
 package diem
 
-import "github.com/DanyGoT/HotStuffs/proto/diempb"
+import "github.com/DanyGoT/diembft/proto/diempb"
 
 // hashOf is a full-length hash whose leading bytes are b.
 func hashOf(b ...byte) []byte {
