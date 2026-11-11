@@ -1,5 +1,5 @@
 {
-  description = "Chained HotStuff on Gorums";
+  description = "DiemBFT on Gorums";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 

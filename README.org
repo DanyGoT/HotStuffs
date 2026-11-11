@@ -1,4 +1,4 @@
-#+title: HotStuff
+#+title: DiemBFT on Gorums
 
 DiemBFT v4 in Go, over Gorums. DiemBFT is a variant of HotStuff that commits
 on two consecutive rounds instead of three. The code follows the pseudocode in
