@@ -14,8 +14,11 @@ func (qc *QuorumCert) Higher(other *QuorumCert) *QuorumCert {
 	return other
 }
 
+// BlockID is the id of the block qc certifies.
+func (qc *QuorumCert) BlockID() []byte { return qc.GetVoteInfo().GetId() }
+
 // ParentID is the id of the block b's certificate certifies.
-func (b *Block) ParentID() []byte { return b.GetQc().GetVoteInfo().GetId() }
+func (b *Block) ParentID() []byte { return b.GetQc().BlockID() }
 
 // Commits reports whether a quorum over l commits a block: its CommitStateId is
 // not the paper's bottom, the all-zero hash.

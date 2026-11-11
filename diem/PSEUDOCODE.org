@@ -612,7 +612,8 @@ the protocol; all of it is the kind of thing that costs a reader time.
   from =state_id= and =votes=. All four should be paths through =vote_info= or
   the declared names; the implementation reads them that way
   (=blocktree.go:ExecuteAndInsert= via =proto/diempb/methods.go:ParentID=,
-  =safety.go:commitStateIDCandidate=, =blocktree.go:ProcessVote=).
+  =safety.go:commitStateIDCandidate= via =proto/diempb/methods.go:BlockID=,
+  =blocktree.go:ProcessVote=).
 - Several procedures dereference a possibly-nil argument. =safe_to_extend= and
   =safe_to_timeout= read =tc.round= where the caller may pass nil;
   =process_certificate_qc= is called with =P.high_commit_qc=, which the message
