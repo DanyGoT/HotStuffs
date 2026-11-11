@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/DanyGoT/diembft/crypto"
 	"github.com/DanyGoT/diembft/diem"
@@ -34,69 +35,84 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var (
-	std = benchkit.RegisterFlags(flag.CommandLine)
+// options holds the parsed command line.
+type options struct {
+	std *benchkit.StandardFlags
 
-	local          = flag.Int("local", 0, "run this many replicas in one process")
-	keys           = flag.String("keys", "", "directory holding <id>.key and <id>.pub; required unless -insecure-seeded-keys")
-	insecureSeeded = flag.Bool("insecure-seeded-keys", false, "without -keys, derive every replica's keys from a public seed; anyone can sign for any replica")
-	genKeys        = flag.Bool("gen-keys", false, "write a key pair per replica into -keys and exit")
-	viewDuration   = flag.Duration("view-duration", 0, "base round timeout; 0 picks a default")
-	sendBuffer     = flag.Uint("send-buffer", 0, "Gorums send queue capacity per peer; 0 picks Gorums' default")
-)
+	local          int
+	keys           string
+	insecureSeeded bool
+	genKeys        bool
+	viewDuration   time.Duration
+	sendBuffer     uint
+}
+
+// newOptions registers the standard benchkit flags and diem's own on fs.
+func newOptions(fs *flag.FlagSet) *options {
+	o := &options{std: benchkit.RegisterFlags(fs)}
+	fs.IntVar(&o.local, "local", 0, "run this many replicas in one process")
+	fs.StringVar(&o.keys, "keys", "", "directory holding <id>.key and <id>.pub; required unless -insecure-seeded-keys")
+	fs.BoolVar(&o.insecureSeeded, "insecure-seeded-keys", false, "without -keys, derive every replica's keys from a public seed; anyone can sign for any replica")
+	fs.BoolVar(&o.genKeys, "gen-keys", false, "write a key pair per replica into -keys and exit")
+	fs.DurationVar(&o.viewDuration, "view-duration", 0, "base round timeout; 0 picks a default")
+	fs.UintVar(&o.sendBuffer, "send-buffer", 0, "Gorums send queue capacity per peer; 0 picks Gorums' default")
+	return o
+}
 
 func main() {
-	flag.Parse()
-	level := slog.LevelInfo
-	if std.Verbose {
-		level = slog.LevelDebug
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
-
-	if err := run(); err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		slog.Error("exiting", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run() (err error) {
-	stop, err := benchkit.StartProfilers(std.CPUProfile, std.MemProfile, std.Trace)
+func run(args []string) (err error) {
+	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	o := newOptions(fs)
+	_ = fs.Parse(args) // ExitOnError exits on a bad flag
+	level := slog.LevelInfo
+	if o.std.Verbose {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
+	stop, err := benchkit.StartProfilers(o.std.CPUProfile, o.std.MemProfile, o.std.Trace)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, stop()) }()
 
 	switch {
-	case *genKeys:
-		return writeKeys()
-	case *local > 0:
-		return runLocal(*local)
-	case std.Self != "":
-		return runOne()
+	case o.genKeys:
+		return o.writeKeys()
+	case o.local > 0:
+		return o.runLocal(o.local)
+	case o.std.Self != "":
+		return o.runOne()
 	}
 	return errors.New("nothing to do: pass -local N, or -self with -remotes")
 }
 
-func writeKeys() error {
-	n := *local
+func (o *options) writeKeys() error {
+	n := o.local
 	if n == 0 {
-		addrs, err := addresses()
+		addrs, err := o.addresses()
 		if err != nil {
 			return err
 		}
 		n = len(addrs)
 	}
-	if n == 0 || *keys == "" {
+	if n == 0 || o.keys == "" {
 		return errors.New("-gen-keys needs -keys and either -local N or -remotes")
 	}
 	privs, _, err := crypto.GenerateKeys(n)
 	if err != nil {
 		return err
 	}
-	if err := crypto.WriteKeys(*keys, privs); err != nil {
+	if err := crypto.WriteKeys(o.keys, privs); err != nil {
 		return err
 	}
-	slog.Info("wrote keys", "dir", *keys, "replicas", n)
+	slog.Info("wrote keys", "dir", o.keys, "replicas", n)
 	return nil
 }
 
@@ -105,14 +121,14 @@ func writeKeys() error {
 // what makes this possible at all: WithPeers needs every address before any
 // server exists. The replicas share one verifier, which needs only the public
 // keys, and so one reject counter.
-func runLocal(n int) error {
+func (o *options) runLocal(n int) error {
 	privs, pubs, err := crypto.GenerateKeys(n)
 	if err != nil {
 		return err
 	}
 	rejected := new(atomic.Uint64)
 	verify := diemnet.VerifyInterceptor(diem.NewVerifier(crypto.New(nil, pubs), diem.QuorumSize(n)), rejected)
-	srvs, stop, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(dialOptions()...),
+	srvs, stop, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(o.dialOptions()...),
 		gorums.WithLocalServerOptions(gorums.WithServerInterceptors(verify)))
 	if err != nil {
 		return err
@@ -124,23 +140,23 @@ func runLocal(n int) error {
 		id := uint32(i + 1)
 		reps[i] = replica.New(replica.Config{
 			ID: id, Key: privs[id], Keys: pubs,
-			Transactions: transactions(),
-			RoundTimeout: *viewDuration,
-			Measure:      std.Options(),
+			Transactions: o.transactions(),
+			RoundTimeout: o.viewDuration,
+			Measure:      o.std.Options(),
 			Server:       srvs[i],
 			Rejected:     rejected,
 		})
 	}
-	return runAll(reps)
+	return o.runAll(reps)
 }
 
 // replicaKeys reads id's keys from -keys. Without it, the seeded set every
 // replica computes alike is used only when -insecure-seeded-keys asks for it.
-func replicaKeys(id uint32, n int) (*ecdsa.PrivateKey, map[uint32]*ecdsa.PublicKey, error) {
-	if *keys != "" {
-		return crypto.ReadKeys(*keys, id)
+func (o *options) replicaKeys(id uint32, n int) (*ecdsa.PrivateKey, map[uint32]*ecdsa.PublicKey, error) {
+	if o.keys != "" {
+		return crypto.ReadKeys(o.keys, id)
 	}
-	if !*insecureSeeded {
+	if !o.insecureSeeded {
 		return nil, nil, errors.New("no -keys: pass -keys DIR, or -insecure-seeded-keys to use public-seed keys")
 	}
 	slog.Warn("using insecure seeded keys")
@@ -153,18 +169,18 @@ func replicaKeys(id uint32, n int) (*ecdsa.PrivateKey, map[uint32]*ecdsa.PublicK
 
 // runOne runs this process's single replica. -remotes lists every replica in ID
 // order, so a replica's position in that list is its ID.
-func runOne() error {
-	addrs, err := addresses()
+func (o *options) runOne() error {
+	addrs, err := o.addresses()
 	if err != nil {
 		return err
 	}
-	self := strings.TrimSpace(std.Self)
+	self := strings.TrimSpace(o.std.Self)
 	idx := slices.Index(addrs, self)
 	if idx < 0 {
 		return fmt.Errorf("-self %q does not appear in -remotes", self)
 	}
 	id := uint32(idx + 1)
-	priv, pubs, err := replicaKeys(id, len(addrs))
+	priv, pubs, err := o.replicaKeys(id, len(addrs))
 	if err != nil {
 		return err
 	}
@@ -172,26 +188,26 @@ func runOne() error {
 	for i, addr := range addrs {
 		peers[uint32(i+1)] = addr
 	}
-	return runAll([]*replica.Replica{replica.New(replica.Config{
+	return o.runAll([]*replica.Replica{replica.New(replica.Config{
 		ID: id, Peers: peers, Listen: self,
 		Key: priv, Keys: pubs,
-		Transactions: transactions(),
-		RoundTimeout: *viewDuration,
-		Measure:      std.Options(),
-		DialOptions:  dialOptions(),
+		Transactions: o.transactions(),
+		RoundTimeout: o.viewDuration,
+		Measure:      o.std.Options(),
+		DialOptions:  o.dialOptions(),
 	})})
 }
 
 // runAll runs every replica for -time from its first round, or until the
 // process is interrupted, then reports what each committed.
-func runAll(reps []*replica.Replica) error {
+func (o *options) runAll(reps []*replica.Replica) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	first := root
-	if std.FaultKillAfter > 0 {
+	if o.std.FaultKillAfter > 0 {
 		var kill context.CancelFunc
-		first, kill = context.WithTimeout(root, std.FaultKillAfter)
+		first, kill = context.WithTimeout(root, o.std.FaultKillAfter)
 		defer kill()
 	}
 
@@ -211,18 +227,18 @@ func runAll(reps []*replica.Replica) error {
 	if err := report(reps); err != nil {
 		return err
 	}
-	if std.Output == "" {
+	if o.std.Output == "" {
 		return nil
 	}
-	return writeResults(reps)
+	return o.writeResults(reps)
 }
 
 // writeResults writes each replica's benchkit Result to -output, so
 // benchkit/cmd/sweep can collect it.
-func writeResults(reps []*replica.Replica) error {
-	n := *local
+func (o *options) writeResults(reps []*replica.Replica) error {
+	n := o.local
 	if n == 0 {
-		addrs, err := addresses()
+		addrs, err := o.addresses()
 		if err != nil {
 			return err
 		}
@@ -234,16 +250,16 @@ func writeResults(reps []*replica.Replica) error {
 		cfg := res.GetConfig()
 		cfg.ApplyDimensions(benchkit.Dimensions{
 			Benchmark: "diem", Nodes: n,
-			Workers: std.Workers, Payload: std.Payload, Rate: std.Rate,
-			SendBuffer: int(*sendBuffer),
+			Workers: o.std.Workers, Payload: o.std.Payload, Rate: o.std.Rate,
+			SendBuffer: int(o.sendBuffer),
 		})
-		cfg.SetDuration(int64(std.Duration))
-		cfg.SetInterval(int64(std.Interval))
-		cfg.SetStatsMode(std.StatsMode)
+		cfg.SetDuration(int64(o.std.Duration))
+		cfg.SetInterval(int64(o.std.Interval))
+		cfg.SetStatsMode(o.std.StatsMode)
 		results[i] = res
 	}
-	label := cmp.Or(std.Self, "local")
-	return benchkit.WriteLabeledReport(results, label, std.Output)
+	label := cmp.Or(o.std.Self, "local")
+	return benchkit.WriteLabeledReport(results, label, o.std.Output)
 }
 
 // report prints each replica's committed depth and checks the logs agree over
@@ -279,13 +295,13 @@ func report(reps []*replica.Replica) error {
 // addresses is -remotes as a list, whitespace trimmed. A replica's position in
 // it is its ID, so an empty or repeated entry would hand two replicas the same
 // identity rather than fail.
-func addresses() ([]string, error) {
-	if len(std.Remotes) == 1 && strings.TrimSpace(std.Remotes[0]) == "" {
+func (o *options) addresses() ([]string, error) {
+	if len(o.std.Remotes) == 1 && strings.TrimSpace(o.std.Remotes[0]) == "" {
 		return nil, nil
 	}
-	addrs := make([]string, len(std.Remotes))
+	addrs := make([]string, len(o.std.Remotes))
 	seen := make(map[string]bool, len(addrs))
-	for i, addr := range std.Remotes {
+	for i, addr := range o.std.Remotes {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
 			return nil, fmt.Errorf("-remotes entry %d is empty", i+1)
@@ -300,18 +316,18 @@ func addresses() ([]string, error) {
 }
 
 // transactions is the leader's payload source; nil proposes empty blocks.
-func transactions() func() [][]byte {
-	if std.Payload <= 0 {
+func (o *options) transactions() func() [][]byte {
+	if o.std.Payload <= 0 {
 		return nil
 	}
-	return replica.NewPayload(std.Payload, std.Workers, std.Rate).Transactions
+	return replica.NewPayload(o.std.Payload, o.std.Workers, o.std.Rate).Transactions
 }
 
 // GORUMS: NewLocalServers and any real dial need explicit transport
 // credentials; there is no insecure default.
-func dialOptions() []gorums.DialOption {
+func (o *options) dialOptions() []gorums.DialOption {
 	return []gorums.DialOption{
 		gorums.WithGRPCDialOptions(grpc.WithTransportCredentials(insecure.NewCredentials())),
-		gorums.WithSendBufferSize(*sendBuffer),
+		gorums.WithSendBufferSize(o.sendBuffer),
 	}
 }

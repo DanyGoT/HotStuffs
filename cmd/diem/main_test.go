@@ -5,6 +5,17 @@ import (
 	"testing"
 )
 
+// parse returns the options for args, parsed on a fresh FlagSet.
+func parse(t *testing.T, args ...string) (*options, *flag.FlagSet) {
+	t.Helper()
+	fs := flag.NewFlagSet("diem", flag.ContinueOnError)
+	o := newOptions(fs)
+	if err := fs.Parse(args); err != nil {
+		t.Fatal(err)
+	}
+	return o, fs
+}
+
 // TestAddresses covers what -remotes must not silently accept: a replica's
 // position in the list is its ID, so a repeated or empty entry would hand two
 // replicas the same identity.
@@ -26,10 +37,8 @@ func TestAddresses(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := flag.Set("remotes", tt.flag); err != nil {
-				t.Fatal(err)
-			}
-			got, err := addresses()
+			o, _ := parse(t, "-remotes", tt.flag)
+			got, err := o.addresses()
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("addresses() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -51,15 +60,12 @@ func TestAddresses(t *testing.T) {
 // TestReplicaKeysNeedsExplicitSeed pins that public-seed keys are never the
 // silent default: without -keys they need -insecure-seeded-keys.
 func TestReplicaKeysNeedsExplicitSeed(t *testing.T) {
-	*keys = ""
-	t.Cleanup(func() { *insecureSeeded = false })
-
-	*insecureSeeded = false
-	if _, _, err := replicaKeys(1, 4); err == nil {
+	o, _ := parse(t)
+	if _, _, err := o.replicaKeys(1, 4); err == nil {
 		t.Fatal("replicaKeys without -keys or -insecure-seeded-keys succeeded")
 	}
-	*insecureSeeded = true
-	if _, _, err := replicaKeys(1, 4); err != nil {
+	o, _ = parse(t, "-insecure-seeded-keys")
+	if _, _, err := o.replicaKeys(1, 4); err != nil {
 		t.Fatalf("replicaKeys with -insecure-seeded-keys: %v", err)
 	}
 }
@@ -67,12 +73,13 @@ func TestReplicaKeysNeedsExplicitSeed(t *testing.T) {
 // TestSweepFlags pins that every flag benchkit/cmd/sweep passes a node is
 // defined; an undefined one stops the binary before it runs.
 func TestSweepFlags(t *testing.T) {
+	_, fs := parse(t)
 	for _, name := range []string{
 		"self", "remotes", "benchmarks", "workers", "payload", "time", "output",
 		"rate", "interval", "stats-mode", "rate-step", "rate-step-max",
 		"stream-mode", "cpuprofile", "memprofile", "verbose",
 	} {
-		if flag.Lookup(name) == nil {
+		if fs.Lookup(name) == nil {
 			t.Errorf("flag -%s is not defined", name)
 		}
 	}
