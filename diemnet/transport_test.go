@@ -197,7 +197,7 @@ func voteOn(t *testing.T, from uint32, n int, blk *diempb.Block) *diempb.VoteMsg
 	voteInfo := diempb.VoteInfo_builder{
 		Id:          blk.GetId(),
 		Round:       1,
-		ParentId:    qc.GetVoteInfo().GetId(),
+		ParentId:    qc.BlockID(),
 		ExecStateId: diem.ExecuteHash(make([]byte, 32), blk.GetPayload()),
 	}.Build()
 	commit := diempb.LedgerCommitInfo_builder{
@@ -778,7 +778,7 @@ func TestClusterCommitsOverGorums(t *testing.T) {
 	// A chain this deep that still agrees is the round-trip assertion at scale.
 	for i, log := range logs {
 		for k := 1; k < len(log); k++ {
-			if !bytes.Equal(log[k].GetQc().GetVoteInfo().GetId(), log[k-1].GetId()) {
+			if !bytes.Equal(log[k].ParentID(), log[k-1].GetId()) {
 				t.Fatalf("replica %d: commit %d does not extend commit %d", i+1, k, k-1)
 			}
 		}

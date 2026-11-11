@@ -100,7 +100,7 @@ func (s *Safety) commitStateIDCandidate(blockRound uint64, qc *diempb.QuorumCert
 	if !consecutive(blockRound, qc.Round()) {
 		return zeroHash[:]
 	}
-	state, ok := s.ledger.PendingState(qc.GetVoteInfo().GetId())
+	state, ok := s.ledger.PendingState(qc.BlockID())
 	if !ok {
 		return zeroHash[:]
 	}

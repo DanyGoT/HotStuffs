@@ -60,7 +60,7 @@ func (b *Block) ComputeID() []byte {
 	for _, p := range b.GetPayload() {
 		writeBytes(h, p)
 	}
-	h.Write(b.GetQc().GetVoteInfo().GetId())
+	h.Write(b.GetQc().BlockID())
 	writeSigs(h, b.GetQc().GetSignatures())
 	return h.Sum(nil)
 }
