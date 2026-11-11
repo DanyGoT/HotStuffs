@@ -20,4 +20,6 @@ Use common sense, and follow these where they apply:
 
 * Before a PR
 
-Run =make test=.
+Run =make fix lint test race check-deps=, and fix every finding. =make lint=
+needs golangci-lint v2.14.0 on your =PATH=. CI runs the same targets on every
+push.
