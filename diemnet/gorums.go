@@ -95,7 +95,7 @@ func New(cfg Config) *Transport {
 		}
 		srv = gorums.NewServer(append([]gorums.ServerOption{
 			gorums.WithAddr(cfg.Listen),
-			gorums.WithPeers(uint32(cfg.ID), gorums.WithNodes(peers), cfg.DialOptions...),
+			gorums.WithPeers(cfg.ID, gorums.WithNodes(peers), cfg.DialOptions...),
 			gorums.WithServerInterceptors(VerifyInterceptor(cfg.Verifier, cfg.Rejected)),
 		}, cfg.ServerOptions...)...)
 	}

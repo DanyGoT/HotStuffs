@@ -188,13 +188,18 @@ func runAll(reps []*replica.Replica) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
+	first := root
+	if std.FaultKillAfter > 0 {
+		var kill context.CancelFunc
+		first, kill = context.WithTimeout(root, std.FaultKillAfter)
+		defer kill()
+	}
+
 	var wg sync.WaitGroup
 	for i, r := range reps {
 		ctx := root
-		if std.FaultKillAfter > 0 && i == 0 {
-			var kill context.CancelFunc
-			ctx, kill = context.WithTimeout(root, std.FaultKillAfter)
-			defer kill()
+		if i == 0 {
+			ctx = first
 		}
 		wg.Go(func() {
 			if err := r.Run(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -244,12 +249,11 @@ func writeResults(reps []*replica.Replica) error {
 // report prints each replica's committed depth and checks the logs agree over
 // their common prefix, which is the whole point of running the thing.
 func report(reps []*replica.Replica) error {
-	w := os.Stdout
 	logs := make([][]*diempb.Block, len(reps))
 	for i, r := range reps {
 		logs[i] = r.Log()
 		c := r.Counters()
-		fmt.Fprintf(w, "replica %d: committed %d (%d commands), dropped %d, declined for a missing ancestor %d, rejected %d\n",
+		fmt.Printf("replica %d: committed %d (%d commands), dropped %d, declined for a missing ancestor %d, rejected %d\n",
 			r.ID(), len(logs[i]), r.Commands(), c.OutboundDropped, r.DeclinedMissingAncestor(), c.Rejected)
 	}
 	for i := range logs {
@@ -262,7 +266,7 @@ func report(reps []*replica.Replica) error {
 		}
 	}
 	if len(reps) > 1 {
-		fmt.Fprintln(w, "logs agree over their common prefix")
+		fmt.Println("logs agree over their common prefix")
 	}
 	for i, l := range logs {
 		if len(l) == 0 {
