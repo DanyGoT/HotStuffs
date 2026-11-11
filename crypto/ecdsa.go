@@ -109,7 +109,7 @@ func SeededKeys(n int) (map[uint32]*ecdsa.PrivateKey, map[uint32]*ecdsa.PublicKe
 // which the first attempt almost always is.
 func seededKey(id uint32) (*ecdsa.PrivateKey, error) {
 	var buf [8]byte
-	binary.BigEndian.PutUint32(buf[:4], uint32(id))
+	binary.BigEndian.PutUint32(buf[:4], id)
 	for ctr := range uint32(16) {
 		binary.BigEndian.PutUint32(buf[4:], ctr)
 		d := sha256.Sum256(buf[:])
