@@ -23,9 +23,14 @@ const fetchTimeout = time.Second
 // Config is what the transport and its inbound handlers need.
 type Config struct {
 	ID       uint32
-	Peers    map[uint32]string // every replica's address, this one included
-	Listen   string            // ":0" picks a free port; read it back with Addr
 	Verifier *diem.Verifier
+	Network
+}
+
+// Network is where a replica listens and how it reaches its peers.
+type Network struct {
+	Peers  map[uint32]string // every replica's address, this one included
+	Listen string            // ":0" picks a free port; read it back with Addr
 
 	DialOptions   []gorums.DialOption
 	ServerOptions []gorums.ServerOption

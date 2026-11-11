@@ -8,14 +8,12 @@ import (
 	"maps"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/DanyGoT/diembft/crypto"
 	"github.com/DanyGoT/diembft/diem"
 	"github.com/DanyGoT/diembft/diemnet"
 	"github.com/DanyGoT/diembft/proto/diempb"
-	"github.com/relab/gorums"
 	"github.com/relab/gorums/benchkit"
 )
 
@@ -26,9 +24,8 @@ const (
 
 // Config is everything a replica needs.
 type Config struct {
-	ID     uint32
-	Peers  map[uint32]string // every replica's address, this one included
-	Listen string            // ":0" picks a free port; read it back with Addr
+	ID uint32
+	diemnet.Network
 
 	Key  *ecdsa.PrivateKey
 	Keys map[uint32]*ecdsa.PublicKey
@@ -42,13 +39,6 @@ type Config struct {
 	// Measure configures the measurement taken from core start. Its Duration
 	// bounds the run; 0 runs until ctx is done.
 	Measure benchkit.Options
-
-	// Server, if set, is the Gorums server to run on, as gorums.NewLocalServers
-	// provides for a single-process cluster. Peers and Listen are then unused,
-	// and Rejected is the counter of the diemnet.VerifyInterceptor on it.
-	Server      *gorums.Server
-	Rejected    *atomic.Uint64
-	DialOptions []gorums.DialOption
 }
 
 // Replica is one DiemBFT replica: a protocol core and the Gorums transport
@@ -100,13 +90,9 @@ func New(cfg Config) *Replica {
 	ledger.OnCommit = r.commit
 
 	r.net = diemnet.New(diemnet.Config{
-		ID:          cfg.ID,
-		Peers:       cfg.Peers,
-		Listen:      cfg.Listen,
-		Verifier:    diem.NewVerifier(signer, diem.QuorumSize(len(validators))),
-		Server:      cfg.Server,
-		Rejected:    cfg.Rejected,
-		DialOptions: cfg.DialOptions,
+		ID:       cfg.ID,
+		Verifier: diem.NewVerifier(signer, diem.QuorumSize(len(validators))),
+		Network:  cfg.Network,
 	})
 	r.core = diem.New(diem.Config{
 		ID:           cfg.ID,
