@@ -5,6 +5,11 @@
 // benchkit result file, so benchkit/cmd/sweep can drive this binary across a
 // cluster. Standard flags with no meaning for one protocol, such as -benchmarks,
 // are accepted and ignored.
+//
+// -fault-kill-after crashes replica -fault-replica that long after its first
+// round, the point -time also counts from, so the wait for peers is not in it.
+// Through sweep, pass both in -extra-args, for example
+// -extra-args "-insecure-seeded-keys -fault-kill-after=10s -fault-replica=1".
 package main
 
 import (
@@ -54,7 +59,7 @@ func newOptions(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.genKeys, "gen-keys", false, "write a key pair per replica into -keys and exit")
 	fs.DurationVar(&o.viewDuration, "view-duration", 0, "base round timeout; 0 picks a default")
 	fs.UintVar(&o.sendBuffer, "send-buffer", 0, "Gorums send queue capacity per peer; 0 picks Gorums' default")
-	fs.IntVar(&o.faultReplica, "fault-replica", 1, "the replica -fault-kill-after stops; every node gets the same sweep -extra-args, so only this one exits")
+	fs.IntVar(&o.faultReplica, "fault-replica", 1, "the replica -fault-kill-after stops, counted from its first round as -time is; every node gets the same sweep -extra-args, so only this one exits")
 	return o
 }
 
@@ -219,31 +224,36 @@ func (o *options) runOne() error {
 
 // runAll runs reps, this process's share of an n-replica cluster, for -time
 // from its first round, or until the process is interrupted, then reports what
-// each committed. Replica target, if it is here, stops after -fault-kill-after.
+// each committed. Replica target, if it is here, stops -fault-kill-after past
+// its first round, so neither counts the wait for peers.
 func (o *options) runAll(n int, reps []*replica.Replica, target uint32) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	first := root
-	if target != 0 {
-		var kill context.CancelFunc
-		first, kill = context.WithTimeout(root, o.std.FaultKillAfter)
-		defer kill()
-	}
-
 	var wg sync.WaitGroup
+	var fault *time.Timer
 	for _, r := range reps {
-		ctx := root
+		ctx, stop := context.WithCancel(root)
 		if r.ID() == target {
-			ctx = first
+			wg.Go(func() {
+				select {
+				case <-r.Started():
+					fault = o.armFault(stop)
+				case <-ctx.Done():
+				}
+			})
 		}
 		wg.Go(func() {
+			defer stop()
 			if err := r.Run(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				slog.Error("replica stopped", "id", r.ID(), "err", err)
 			}
 		})
 	}
 	wg.Wait()
+	if fault != nil {
+		fault.Stop()
+	}
 	sums := make([]summary, len(reps))
 	results := make([]*benchkit.Result, len(reps))
 	for i, r := range reps {
@@ -256,6 +266,16 @@ func (o *options) runAll(n int, reps []*replica.Replica, target uint32) error {
 		return nil
 	}
 	return o.writeResults(n, results)
+}
+
+// armFault stops the fault target -fault-kill-after from now. With -local the
+// target's run is cancelled and it still reports. On the cluster the process
+// exits and writes no result, which sweep reads as a crashed node.
+func (o *options) armFault(stop context.CancelFunc) *time.Timer {
+	if o.local > 0 {
+		return time.AfterFunc(o.std.FaultKillAfter, stop)
+	}
+	return benchkit.ArmFaultInjection(o.std.FaultKillAfter)
 }
 
 // addresses is -remotes as a list, whitespace trimmed. A replica's position in

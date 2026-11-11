@@ -63,6 +63,7 @@ type Replica struct {
 	measure benchkit.Options
 	m       *benchkit.Measurement
 	result  *benchkit.Result
+	started chan struct{}
 }
 
 // New wires a replica.
@@ -85,7 +86,7 @@ func New(cfg Config) *Replica {
 
 	validators := slices.Sorted(maps.Keys(cfg.Keys))
 	signer := crypto.New(cfg.Key, cfg.Keys)
-	r := &Replica{id: cfg.ID, proposed: map[uint64]time.Time{}, measure: cfg.Measure}
+	r := &Replica{id: cfg.ID, proposed: map[uint64]time.Time{}, measure: cfg.Measure, started: make(chan struct{})}
 	ledger := diem.NewMemLedger()
 	ledger.OnCommit = r.commit
 
@@ -154,6 +155,7 @@ func (r *Replica) Run(ctx context.Context) error {
 	r.m = benchkit.StartMeasurement(r.measure)
 	r.core.Start()
 	r.mu.Unlock()
+	close(r.started)
 
 	if d := r.measure.Duration; d > 0 {
 		var cancel context.CancelFunc
@@ -178,6 +180,10 @@ func (r *Replica) Run(ctx context.Context) error {
 // proposed, timed propose to commit on its own clock. Read it only after Run
 // returns; it is nil if Run never reached the first round.
 func (r *Replica) Result() *benchkit.Result { return r.result }
+
+// Started is closed when Run reaches the first round, after every peer is
+// connected. The measurement and Measure.Duration count from here.
+func (r *Replica) Started() <-chan struct{} { return r.started }
 
 // ID is this replica's identity.
 func (r *Replica) ID() uint32 { return r.id }
