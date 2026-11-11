@@ -8,8 +8,6 @@
 package main
 
 import (
-	"bytes"
-	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"errors"
@@ -27,7 +25,6 @@ import (
 	"github.com/DanyGoT/diembft/crypto"
 	"github.com/DanyGoT/diembft/diem"
 	"github.com/DanyGoT/diembft/diemnet"
-	"github.com/DanyGoT/diembft/proto/diempb"
 	"github.com/DanyGoT/diembft/replica"
 	"github.com/relab/gorums"
 	"github.com/relab/gorums/benchkit"
@@ -147,7 +144,7 @@ func (o *options) runLocal(n int) error {
 			Rejected:     rejected,
 		})
 	}
-	return o.runAll(reps)
+	return o.runAll(n, reps)
 }
 
 // replicaKeys reads id's keys from -keys. Without it, the seeded set every
@@ -188,7 +185,7 @@ func (o *options) runOne() error {
 	for i, addr := range addrs {
 		peers[uint32(i+1)] = addr
 	}
-	return o.runAll([]*replica.Replica{replica.New(replica.Config{
+	return o.runAll(len(addrs), []*replica.Replica{replica.New(replica.Config{
 		ID: id, Peers: peers, Listen: self,
 		Key: priv, Keys: pubs,
 		Transactions: o.transactions(),
@@ -198,9 +195,10 @@ func (o *options) runOne() error {
 	})})
 }
 
-// runAll runs every replica for -time from its first round, or until the
-// process is interrupted, then reports what each committed.
-func (o *options) runAll(reps []*replica.Replica) error {
+// runAll runs reps, this process's share of an n-replica cluster, for -time
+// from its first round, or until the process is interrupted, then reports what
+// each committed.
+func (o *options) runAll(n int, reps []*replica.Replica) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
@@ -224,72 +222,18 @@ func (o *options) runAll(reps []*replica.Replica) error {
 		})
 	}
 	wg.Wait()
-	if err := report(reps); err != nil {
+	sums := make([]summary, len(reps))
+	results := make([]*benchkit.Result, len(reps))
+	for i, r := range reps {
+		sums[i], results[i] = summarize(r), r.Result()
+	}
+	if err := report(os.Stdout, sums); err != nil {
 		return err
 	}
 	if o.std.Output == "" {
 		return nil
 	}
-	return o.writeResults(reps)
-}
-
-// writeResults writes each replica's benchkit Result to -output, so
-// benchkit/cmd/sweep can collect it.
-func (o *options) writeResults(reps []*replica.Replica) error {
-	n := o.local
-	if n == 0 {
-		addrs, err := o.addresses()
-		if err != nil {
-			return err
-		}
-		n = len(addrs)
-	}
-	results := make([]*benchkit.Result, len(reps))
-	for i, r := range reps {
-		res := r.Result()
-		cfg := res.GetConfig()
-		cfg.ApplyDimensions(benchkit.Dimensions{
-			Benchmark: "diem", Nodes: n,
-			Workers: o.std.Workers, Payload: o.std.Payload, Rate: o.std.Rate,
-			SendBuffer: int(o.sendBuffer),
-		})
-		cfg.SetDuration(int64(o.std.Duration))
-		cfg.SetInterval(int64(o.std.Interval))
-		cfg.SetStatsMode(o.std.StatsMode)
-		results[i] = res
-	}
-	label := cmp.Or(o.std.Self, "local")
-	return benchkit.WriteLabeledReport(results, label, o.std.Output)
-}
-
-// report prints each replica's committed depth and checks the logs agree over
-// their common prefix, which is the whole point of running the thing.
-func report(reps []*replica.Replica) error {
-	logs := make([][]*diempb.Block, len(reps))
-	for i, r := range reps {
-		logs[i] = r.Log()
-		c := r.Counters()
-		fmt.Printf("replica %d: committed %d (%d commands), dropped %d, declined for a missing ancestor %d, rejected %d\n",
-			r.ID(), len(logs[i]), r.Commands(), c.OutboundDropped, r.DeclinedMissingAncestor(), c.Rejected)
-	}
-	for i := range logs {
-		for j := i + 1; j < len(logs); j++ {
-			for k := range min(len(logs[i]), len(logs[j])) {
-				if !bytes.Equal(logs[i][k].GetId(), logs[j][k].GetId()) {
-					return fmt.Errorf("replicas %d and %d disagree at commit %d", reps[i].ID(), reps[j].ID(), k)
-				}
-			}
-		}
-	}
-	if len(reps) > 1 {
-		fmt.Println("logs agree over their common prefix")
-	}
-	for i, l := range logs {
-		if len(l) == 0 {
-			return fmt.Errorf("replica %d committed no block", reps[i].ID())
-		}
-	}
-	return nil
+	return o.writeResults(n, results)
 }
 
 // addresses is -remotes as a list, whitespace trimmed. A replica's position in
