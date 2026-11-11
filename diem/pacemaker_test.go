@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // recordNet is a Transport double that records what was sent, distinct from

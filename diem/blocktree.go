@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"slices"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // BlockTree is the paper's Block-tree module (3.3): the tree of blocks pending

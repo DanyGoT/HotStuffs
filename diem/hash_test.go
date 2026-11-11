@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // TestDomainSeparation checks that the domain tag actually separates the four

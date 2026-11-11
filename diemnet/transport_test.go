@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/crypto"
-	"github.com/DanyGoT/HotStuffs/diem"
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/crypto"
+	"github.com/DanyGoT/diembft/diem"
+	"github.com/DanyGoT/diembft/proto/diempb"
 	"github.com/relab/gorums"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

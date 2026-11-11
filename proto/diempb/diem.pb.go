@@ -1421,7 +1421,7 @@ const file_proto_diempb_diem_proto_rawDesc = "" +
 	"\bProposal\x12\x13.diempb.ProposalMsg\x1a\x16.google.protobuf.Empty\"\x04\x98\xb5\x18\x01\x125\n" +
 	"\x04Vote\x12\x0f.diempb.VoteMsg\x1a\x16.google.protobuf.Empty\"\x04\x90\xb5\x18\x01\x12;\n" +
 	"\aTimeout\x12\x12.diempb.TimeoutMsg\x1a\x16.google.protobuf.Empty\"\x04\x98\xb5\x18\x01\x126\n" +
-	"\fRequestBlock\x12\x11.diempb.BlockHash\x1a\r.diempb.Block\"\x04\xa0\xb5\x18\x01B0Z)github.com/DanyGoT/HotStuffs/proto/diempb\x92\x03\x02\b\x02b\beditionsp\xe9\a"
+	"\fRequestBlock\x12\x11.diempb.BlockHash\x1a\r.diempb.Block\"\x04\xa0\xb5\x18\x01B.Z'github.com/DanyGoT/diembft/proto/diempb\x92\x03\x02\b\x02b\beditionsp\xe9\a"
 
 var file_proto_diempb_diem_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_proto_diempb_diem_proto_goTypes = []any{

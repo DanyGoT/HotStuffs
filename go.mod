@@ -1,4 +1,4 @@
-module github.com/DanyGoT/HotStuffs
+module github.com/DanyGoT/diembft
 
 go 1.27.3
 

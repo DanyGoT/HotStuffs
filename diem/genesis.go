@@ -1,6 +1,6 @@
 package diem
 
-import "github.com/DanyGoT/HotStuffs/proto/diempb"
+import "github.com/DanyGoT/diembft/proto/diempb"
 
 // The genesis block and the certificate for it are hardcoded identically by
 // every replica, which is what gives round 1 a parent to extend.

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // The tests here cover what Core decides from protocol state — which round it

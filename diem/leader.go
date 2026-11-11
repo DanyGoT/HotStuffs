@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"slices"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // LeaderElection is the paper's LeaderElection module (3.7). It maps rounds to

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 func TestNewMemLedgerGenesisCommitted(t *testing.T) {

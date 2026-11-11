@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // Core is the paper's Main module (3.1): one method per input, each

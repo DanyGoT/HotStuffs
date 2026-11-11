@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 )
 
 // newTestTree returns a block tree over a fresh ledger, at the group size and

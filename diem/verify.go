@@ -3,7 +3,7 @@ package diem
 import (
 	"bytes"
 
-	"github.com/DanyGoT/HotStuffs/proto/diempb"
+	"github.com/DanyGoT/diembft/proto/diempb"
 	"google.golang.org/protobuf/proto"
 )
 

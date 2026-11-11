@@ -1,6 +1,6 @@
 package diem
 
-import "github.com/DanyGoT/HotStuffs/proto/diempb"
+import "github.com/DanyGoT/diembft/proto/diempb"
 
 // Safety is the paper's Safety module (3.4): the core consensus safety rules
 // and the only holder of the private key.
