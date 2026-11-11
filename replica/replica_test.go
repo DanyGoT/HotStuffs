@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"runtime"
 	"slices"
 	"strings"
@@ -208,6 +209,54 @@ func TestResultCountsOwnBlocks(t *testing.T) {
 			t.Errorf("replica %d: interval events carry %d ops, want %d", r.ID(), streamed, own)
 		}
 	}
+}
+
+// TestStartedWaitsForPeers pins that Started, which cmd/diem counts
+// -fault-kill-after from, closes only once every peer is connected: not while
+// one is down, and once the whole cluster is up.
+func TestStartedWaitsForPeers(t *testing.T) {
+	privs, pubs, err := crypto.GenerateKeys(2)
+	if err != nil {
+		t.Fatalf("GenerateKeys: %v", err)
+	}
+	down, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := down.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lone := New(Config{
+		ID: 1, Key: privs[1], Keys: pubs,
+		Listen:      "127.0.0.1:0",
+		Peers:       map[uint32]string{1: "127.0.0.1:0", 2: down.Addr().String()},
+		DialOptions: []gorums.DialOption{insecureDial},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := lone.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run with a peer down returned %v, want context.DeadlineExceeded", err)
+	}
+	select {
+	case <-lone.Started():
+		t.Fatal("Started closed while a peer was down")
+	default:
+	}
+
+	reps, run := cluster(t, 4, testRound)
+	ctx, cancel = context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	allDone := make(chan struct{})
+	go func() { run(ctx); close(allDone) }()
+	for _, r := range reps {
+		select {
+		case <-r.Started():
+		case <-time.After(10 * time.Second):
+			t.Fatalf("replica %d: Started not closed with every peer up", r.ID())
+		}
+	}
+	cancel()
+	<-allDone
 }
 
 // stallStreams makes every stream stop sending, as it does when the peer stops
