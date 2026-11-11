@@ -70,6 +70,33 @@ func TestReplicaKeysNeedsExplicitSeed(t *testing.T) {
 	}
 }
 
+// TestFaultTarget pins which replica -fault-kill-after stops, and that a
+// -fault-replica outside the cluster fails rather than stopping nobody.
+func TestFaultTarget(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    uint32
+		wantErr bool
+	}{
+		{"off", nil, 0, false},
+		{"off ignores -fault-replica", []string{"-fault-replica=9"}, 0, false},
+		{"default", []string{"-fault-kill-after=1s"}, 1, false},
+		{"chosen", []string{"-fault-kill-after=1s", "-fault-replica=4"}, 4, false},
+		{"zero", []string{"-fault-kill-after=1s", "-fault-replica=0"}, 0, true},
+		{"past n", []string{"-fault-kill-after=1s", "-fault-replica=5"}, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o, _ := parse(t, tt.args...)
+			got, err := o.faultTarget(4)
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Errorf("faultTarget(4) = %d, %v; want %d, error %v", got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}
+
 // TestSweepFlags pins that every flag benchkit/cmd/sweep passes a node is
 // defined; an undefined one stops the binary before it runs.
 func TestSweepFlags(t *testing.T) {

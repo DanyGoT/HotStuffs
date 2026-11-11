@@ -42,6 +42,7 @@ type options struct {
 	genKeys        bool
 	viewDuration   time.Duration
 	sendBuffer     uint
+	faultReplica   int
 }
 
 // newOptions registers the standard benchkit flags and diem's own on fs.
@@ -53,7 +54,20 @@ func newOptions(fs *flag.FlagSet) *options {
 	fs.BoolVar(&o.genKeys, "gen-keys", false, "write a key pair per replica into -keys and exit")
 	fs.DurationVar(&o.viewDuration, "view-duration", 0, "base round timeout; 0 picks a default")
 	fs.UintVar(&o.sendBuffer, "send-buffer", 0, "Gorums send queue capacity per peer; 0 picks Gorums' default")
+	fs.IntVar(&o.faultReplica, "fault-replica", 1, "the replica -fault-kill-after stops; every node gets the same sweep -extra-args, so only this one exits")
 	return o
+}
+
+// faultTarget is the ID of the replica -fault-kill-after stops in an n-replica
+// cluster, or 0 when no fault is asked for.
+func (o *options) faultTarget(n int) (uint32, error) {
+	if o.std.FaultKillAfter <= 0 {
+		return 0, nil
+	}
+	if o.faultReplica < 1 || o.faultReplica > n {
+		return 0, fmt.Errorf("-fault-replica %d is not one of the replicas 1..%d", o.faultReplica, n)
+	}
+	return uint32(o.faultReplica), nil
 }
 
 func main() {
@@ -119,6 +133,10 @@ func (o *options) writeKeys() error {
 // server exists. The replicas share one verifier, which needs only the public
 // keys, and so one reject counter.
 func (o *options) runLocal(n int) error {
+	target, err := o.faultTarget(n)
+	if err != nil {
+		return err
+	}
 	privs, pubs, err := crypto.GenerateKeys(n)
 	if err != nil {
 		return err
@@ -144,7 +162,7 @@ func (o *options) runLocal(n int) error {
 			Rejected:     rejected,
 		})
 	}
-	return o.runAll(n, reps)
+	return o.runAll(n, reps, target)
 }
 
 // replicaKeys reads id's keys from -keys. Without it, the seeded set every
@@ -177,6 +195,10 @@ func (o *options) runOne() error {
 		return fmt.Errorf("-self %q does not appear in -remotes", self)
 	}
 	id := uint32(idx + 1)
+	target, err := o.faultTarget(len(addrs))
+	if err != nil {
+		return err
+	}
 	priv, pubs, err := o.replicaKeys(id, len(addrs))
 	if err != nil {
 		return err
@@ -192,27 +214,27 @@ func (o *options) runOne() error {
 		RoundTimeout: o.viewDuration,
 		Measure:      o.std.Options(),
 		DialOptions:  o.dialOptions(),
-	})})
+	})}, target)
 }
 
 // runAll runs reps, this process's share of an n-replica cluster, for -time
 // from its first round, or until the process is interrupted, then reports what
-// each committed.
-func (o *options) runAll(n int, reps []*replica.Replica) error {
+// each committed. Replica target, if it is here, stops after -fault-kill-after.
+func (o *options) runAll(n int, reps []*replica.Replica, target uint32) error {
 	root, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
 	first := root
-	if o.std.FaultKillAfter > 0 {
+	if target != 0 {
 		var kill context.CancelFunc
 		first, kill = context.WithTimeout(root, o.std.FaultKillAfter)
 		defer kill()
 	}
 
 	var wg sync.WaitGroup
-	for i, r := range reps {
+	for _, r := range reps {
 		ctx := root
-		if i == 0 {
+		if r.ID() == target {
 			ctx = first
 		}
 		wg.Go(func() {
