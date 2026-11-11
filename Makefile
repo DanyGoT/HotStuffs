@@ -2,7 +2,7 @@ PROTO   := proto/diempb/diem.proto
 BIN     := $(CURDIR)/bin
 PLUGINS := bin/protoc-gen-go bin/protoc-gen-gorums
 
-.PHONY: all proto build test race check-deps tools clean
+.PHONY: all proto build fix lint test race check-deps tools clean
 
 all: build test
 
@@ -20,6 +20,12 @@ proto: $(PLUGINS)
 
 build:
 	go build ./...
+
+fix:
+	go fix ./...
+
+lint:
+	golangci-lint run ./...
 
 test:
 	go test ./...
