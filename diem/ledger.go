@@ -1,6 +1,10 @@
 package diem
 
-import "github.com/DanyGoT/HotStuffs/proto/diempb"
+import (
+	"slices"
+
+	"github.com/DanyGoT/HotStuffs/proto/diempb"
+)
 
 // MemLedger is the in-memory ledger (paper 3.2): a branching tree of
 // speculative states extending the last committed one, plus the committed
@@ -138,8 +142,7 @@ func (l *MemLedger) Commit(blockID []byte) {
 		chain = append(chain, s)
 		id = string(parentID(s.block))
 	}
-	for i := len(chain) - 1; i >= 0; i-- {
-		s := chain[i]
+	for _, s := range slices.Backward(chain) {
 		id := string(s.block.GetId())
 		delete(l.pending, id)
 		l.committed[id] = s.block
