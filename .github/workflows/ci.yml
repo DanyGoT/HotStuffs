@@ -13,11 +13,9 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      # Keep the version in step with the local golangci-lint.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.14.0
+          version: latest
           install-only: true
-      - run: make fix lint test race check-deps
-      # make fix rewrites files; a rewrite means the commit missed it.
-      - run: git diff --exit-code
+      - run: go fix -diff ./...
+      - run: make lint test race check-deps
