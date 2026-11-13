@@ -6,6 +6,11 @@
 // cluster. Standard flags with no meaning for one protocol, such as -benchmarks,
 // are accepted and ignored.
 //
+// diem has no clients, so -workers, in benchkit the number of concurrent
+// callers, is the batch here: the most commands a leader puts in one block,
+// each -payload bytes. With -payload 0 blocks are empty and -workers is
+// unused. The Workers column of diem's result files is that batch.
+//
 // -fault-kill-after crashes replica -fault-replica that long after its first
 // round, the point -time also counts from, so the wait for peers is not in it.
 // Through sweep, pass both in -extra-args, for example
