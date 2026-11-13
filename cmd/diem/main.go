@@ -259,7 +259,7 @@ func (o *options) runAll(n int, reps []*replica.Replica, target uint32) error {
 	for i, r := range reps {
 		sums[i], results[i] = summarize(r), r.Result()
 	}
-	if err := report(os.Stdout, sums); err != nil {
+	if err := report(os.Stderr, sums); err != nil {
 		return err
 	}
 	if o.std.Output == "" {
