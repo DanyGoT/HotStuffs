@@ -20,13 +20,14 @@
 # Environment:
 #   HOSTS    sweep host pattern (default 'pitter[1-15]'); scale needs 14 and long 5,
 #            because their driver sits out of the pool
-#   GORUMS   Gorums checkout holding benchkit (default ~/sync/skole/26H/DAT620/gorums)
+#   GORUMS   Gorums checkout holding benchkit (required by every command
+#            but ssh-config)
 #   OUT      where results land (default <repo>/out/uis)
 #   UIS_USER your UiS username, for ssh-config only
 set -euo pipefail
 
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
-gorums=${GORUMS:-$HOME/sync/skole/26H/DAT620/gorums}
+gorums=${GORUMS:-}
 hosts=${HOSTS:-pitter[1-15]}
 out=${OUT:-$repo/out/uis}
 bin=$repo/bin/diem-linux-amd64
@@ -35,6 +36,7 @@ sweepbin=$repo/bin/sweep
 # sweep is built with the command behind Gorums' "make sweep", minus that
 # target's protobuf regeneration, which needs protoc.
 build() {
+    : "${GORUMS:?point it at a Gorums checkout that holds benchkit/}"
     GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -C "$repo" -o "$bin" ./cmd/diem
     go build -C "$gorums/benchkit/cmd/sweep" -o "$sweepbin" .
 }
