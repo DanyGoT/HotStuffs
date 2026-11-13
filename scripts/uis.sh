@@ -37,8 +37,8 @@ sweepbin=$repo/bin/sweep
 # target's protobuf regeneration, which needs protoc.
 build() {
     : "${GORUMS:?point it at a Gorums checkout that holds benchkit/}"
-    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -C "$repo" -o "$bin" ./cmd/diem
-    go build -C "$gorums/benchkit/cmd/sweep" -o "$sweepbin" .
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -C "$repo" -o "$bin" ./cmd/diem &&
+        go build -C "$gorums/benchkit/cmd/sweep" -o "$sweepbin" .
 }
 
 # sweep refuses to run outside the benchkit module root.
