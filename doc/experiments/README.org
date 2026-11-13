@@ -40,3 +40,9 @@ the jump host, clocks and ports. Fix whatever it reports before going on.
 commit at all. Results land under =OUT=. =scripts/uis.sh= with no argument
 lists the other commands (=scale=, =load=, =rate=, =long=, =collect=,
 =plot=, =all=).
+
+diem has no clients, so it reads sweep's =-workers= as the batch: the most
+commands a leader puts in one block (unused with =-payload 0=, where blocks
+are empty). In diem's result files and reports the
+Workers column is that batch, not a number of concurrent callers as in other
+benchkit programs.
