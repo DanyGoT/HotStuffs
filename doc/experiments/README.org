@@ -14,6 +14,8 @@ sweep in a Gorums checkout.
 
 Prerequisites:
 - Go, and a Gorums checkout that contains =benchkit/=. Set =GORUMS= to its path.
+- Typst, which =scripts/uis.sh plot= needs to compile the report to PDF. The
+  dev shell (=nix develop=) has it.
 - SSH to the VMs through the UiS jump host. Add this to =~/.ssh/config=, with
   your UiS username; =UIS_USER=<username> scripts/uis.sh ssh-config= prints it:
   #+begin_example

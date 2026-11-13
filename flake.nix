@@ -13,7 +13,7 @@
         default = pkgs.mkShell {
           # protoc only; protoc-gen-go and protoc-gen-gorums come from go.mod
           # tool directives, so they stay pinned to the library they generate for.
-          packages = [ pkgs.go_1_27 pkgs.golangci-lint pkgs.protobuf pkgs.gnumake ];
+          packages = [ pkgs.go_1_27 pkgs.golangci-lint pkgs.protobuf pkgs.gnumake pkgs.typst ];
         };
       });
     };
