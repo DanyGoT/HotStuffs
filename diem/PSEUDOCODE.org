@@ -103,9 +103,8 @@ If this replica leads the round it just entered, build a block over =HighQC=,
 sign its id and broadcast the proposal.
 
 - Implemented :: =core.go:processNewRoundEvent=. The payload comes from
-  =core.go:Transactions= (a =Config= field), nil-checked there, which is this
-  package's MemPool seam. The =sign= call is the only =crypto= call in
-  =core.go=.
+  =core.go:Config.MemPool=, nil-checked there. The =sign= call is the only
+  =crypto= call in =core.go=.
 - Differs :: the paper forwards =last_tc= verbatim. =processNewRoundEvent=
   passes it through =core.go:justifyingTC=, which returns nil when the block's
   own QC is already from round-1. Forwarding it would produce a proposal that
@@ -430,12 +429,10 @@ locally as well (Bracha amplification), at 2f+1 return the TC.
 
 The only procedure the paper declares in this module, with no body.
 
-- Implemented :: =mempool.go:GetTransactions=, a bounded FIFO handing out at
-  most =batch= per call. =Core= reaches it through the =Config.Transactions=
-  function (=core.go:Transactions=), called in =processNewRoundEvent=; in
-  production it is =replica/payload.go:Transactions=.
-- Differs :: nothing the paper constrains. =mempool.go:Add= is
-  the ingress the paper does not define; an empty result is normal and still
+- Implemented :: =seams.go:MemPool=, the =Config.MemPool= field, called in
+  =core.go:processNewRoundEvent=. In production it is
+  =replica/payload.go:GetTransactions=, a synthetic workload.
+- Differs :: nothing the paper constrains. An empty result is normal and still
   produces a block, since the pipeline is what commits the blocks below it.
 
 * 3.7 LeaderElection
@@ -560,7 +557,6 @@ Section 3 is a protocol, not a program. These are what it takes to run one.
   a vote signature from ever verifying as a timeout signature, or either as a
   block id.
 - Observability :: =core.go:State=, the snapshot type and its accessor.
-- MemPool ingress :: =mempool.go:Add=.
 
 * Where the paper is self-contradictory
 

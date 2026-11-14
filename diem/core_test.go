@@ -26,15 +26,15 @@ func newCoreFixture(t *testing.T) *coreFixture {
 	f := &coreFixture{ledger: NewMemLedger(), net: &recordNet{}}
 	ids := []uint32{1, 2, 3, 4}
 	f.core = New(Config{
-		ID:           2,
-		Validators:   ids,
-		Ledger:       f.ledger,
-		Transactions: NewFIFOPool(16, 2).GetTransactions,
-		Crypto:       newTestSigner(testN),
-		Transport:    f.net,
-		Clock:        newFakeClock(),
-		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
-		Lock:         new(sync.Mutex),
+		ID:         2,
+		Validators: ids,
+		Ledger:     f.ledger,
+		MemPool:    &fifoPool{batch: 2},
+		Crypto:     newTestSigner(testN),
+		Transport:  f.net,
+		Clock:      newFakeClock(),
+		Backoff:    NewBackoff(100*time.Millisecond, time.Second, 2),
+		Lock:       new(sync.Mutex),
 	})
 	f.core.Start()
 	if got := f.core.State().Round; got != 1 {
@@ -262,15 +262,15 @@ func TestCoreStopDisarmsTimer(t *testing.T) {
 	clock := newFakeClock()
 	net := &recordNet{}
 	core := New(Config{
-		ID:           1,
-		Validators:   []uint32{1, 2, 3, 4},
-		Ledger:       NewMemLedger(),
-		Transactions: NewFIFOPool(16, 2).GetTransactions,
-		Crypto:       newTestSigner(testN),
-		Transport:    net,
-		Clock:        clock,
-		Backoff:      NewBackoff(100*time.Millisecond, time.Second, 2),
-		Lock:         new(sync.Mutex),
+		ID:         1,
+		Validators: []uint32{1, 2, 3, 4},
+		Ledger:     NewMemLedger(),
+		MemPool:    &fifoPool{batch: 2},
+		Crypto:     newTestSigner(testN),
+		Transport:  net,
+		Clock:      clock,
+		Backoff:    NewBackoff(100*time.Millisecond, time.Second, 2),
+		Lock:       new(sync.Mutex),
 	})
 	core.Start()
 	core.Stop()

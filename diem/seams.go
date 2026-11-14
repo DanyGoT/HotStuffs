@@ -31,6 +31,13 @@ type Crypto interface {
 	Verify(signer uint32, digest, sig []byte) bool
 }
 
+// MemPool is the paper's MemPool module (3.6). GetTransactions runs under
+// Config.Lock and must not block. An empty result still produces a block,
+// since the pipeline is what commits the blocks below it.
+type MemPool interface {
+	GetTransactions() [][]byte
+}
+
 // Clock is the time source. The deterministic harness supplies a fake one.
 type Clock interface {
 	Now() time.Time

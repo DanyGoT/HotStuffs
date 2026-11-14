@@ -20,7 +20,7 @@ type sim struct {
 
 	cores   map[uint32]*Core
 	vers    map[uint32]*Verifier
-	pools   map[uint32]*FIFOPool
+	pools   map[uint32]*fifoPool
 	commits map[uint32][]*diempb.Block
 	down    map[uint32]bool
 
@@ -50,7 +50,7 @@ func newSim(t *testing.T, n int, down ...uint32) *sim {
 		clock:   newFakeClock(),
 		cores:   map[uint32]*Core{},
 		vers:    map[uint32]*Verifier{},
-		pools:   map[uint32]*FIFOPool{},
+		pools:   map[uint32]*fifoPool{},
 		commits: map[uint32][]*diempb.Block{},
 		down:    map[uint32]bool{},
 	}
@@ -63,19 +63,19 @@ func newSim(t *testing.T, n int, down ...uint32) *sim {
 	for _, id := range s.ids {
 		ledger := NewMemLedger()
 		ledger.OnCommit = func(b *diempb.Block) { s.commits[id] = append(s.commits[id], b) }
-		pool := NewFIFOPool(1024, 2)
+		pool := &fifoPool{batch: 2}
 		s.pools[id] = pool
 		s.vers[id] = NewVerifier(newTestSigner(n), QuorumSize(n))
 		s.cores[id] = New(Config{
-			ID:           id,
-			Validators:   s.ids,
-			Ledger:       ledger,
-			Transactions: pool.GetTransactions,
-			Crypto:       newTestSigner(n),
-			Transport:    &simNet{s: s, id: id},
-			Clock:        s.clock,
-			Backoff:      NewBackoff(simRoundBase, simRoundMax, 2),
-			Lock:         new(sync.Mutex),
+			ID:         id,
+			Validators: s.ids,
+			Ledger:     ledger,
+			MemPool:    pool,
+			Crypto:     newTestSigner(n),
+			Transport:  &simNet{s: s, id: id},
+			Clock:      s.clock,
+			Backoff:    NewBackoff(simRoundBase, simRoundMax, 2),
+			Lock:       new(sync.Mutex),
 		})
 	}
 	return s

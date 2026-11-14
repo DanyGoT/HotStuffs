@@ -22,6 +22,22 @@ func (s *testSigner) Verify(signer uint32, digest, sig []byte) bool {
 	return bytes.Equal(sig, digest)
 }
 
+// fifoPool is a MemPool handing out at most batch queued transactions per
+// proposal, oldest first.
+type fifoPool struct {
+	q     [][]byte
+	batch int
+}
+
+func (p *fifoPool) Add(txn []byte) { p.q = append(p.q, txn) }
+
+func (p *fifoPool) GetTransactions() [][]byte {
+	n := min(p.batch, len(p.q))
+	out := p.q[:n:n]
+	p.q = p.q[n:]
+	return out
+}
+
 // fakeClock is a clock driven by hand: timers fire only from Advance, in
 // deadline order with insertion order breaking ties. Sharing one across
 // replicas is what makes a multi-replica simulation reproducible.
