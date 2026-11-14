@@ -58,11 +58,8 @@ type Config struct {
 
 // State is a scalar snapshot of this replica's progress.
 type State struct {
-	Round            uint64
-	HighQCRound      uint64
-	HighCommitRound  uint64
-	HighestVoteRound uint64
-	HighestQCRound   uint64
+	Round       uint64
+	HighQCRound uint64
 
 	// DeclinedMissingAncestor is monotonic. A rate taken over it is the rate at
 	// which this replica lost a vote to a gap in its own chain before block
@@ -150,11 +147,8 @@ func (c *Core) Stop() {
 // State is the scalar snapshot of this replica's progress.
 func (c *Core) State() State {
 	return State{
-		Round:            c.pacemaker.CurrentRound(),
-		HighQCRound:      c.tree.HighQC().Round(),
-		HighCommitRound:  c.tree.HighCommitQC().Round(),
-		HighestVoteRound: c.safety.HighestVoteRound(),
-		HighestQCRound:   c.safety.HighestQCRound(),
+		Round:       c.pacemaker.CurrentRound(),
+		HighQCRound: c.tree.HighQC().Round(),
 
 		DeclinedMissingAncestor: c.safety.DeclinedMissingAncestor(),
 	}
