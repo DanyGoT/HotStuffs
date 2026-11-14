@@ -3,7 +3,7 @@ package replica
 import "time"
 
 // Payload is a synthetic workload: batches of identical commands of a fixed
-// size, capped at a target rate. Transactions is called only inside a core
+// size, capped at a target rate. GetTransactions is called only inside a core
 // call, under the replica's lock, so it needs none of its own, and it never
 // blocks — it returns nothing when this instant's budget is spent.
 type Payload struct {
@@ -26,8 +26,8 @@ func NewPayload(size, batch, rate int) *Payload {
 	return &Payload{cmd: make([]byte, size), batch: batch, rate: float64(rate)}
 }
 
-// Transactions is the paper's MemPool.get_transactions (3.6).
-func (p *Payload) Transactions() [][]byte {
+// GetTransactions is the paper's MemPool.get_transactions (3.6).
+func (p *Payload) GetTransactions() [][]byte {
 	n := p.batch
 	if p.rate > 0 {
 		now := time.Now()

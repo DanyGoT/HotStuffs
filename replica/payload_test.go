@@ -10,7 +10,7 @@ func TestPayloadUnthrottled(t *testing.T) {
 	const size, batch = 32, 4
 	p := NewPayload(size, batch, 0)
 	for i := range 5 {
-		cmds := p.Transactions()
+		cmds := p.GetTransactions()
 		if len(cmds) != batch {
 			t.Fatalf("call %d: len(cmds) = %d, want %d", i, len(cmds), batch)
 		}
@@ -24,7 +24,7 @@ func TestPayloadUnthrottled(t *testing.T) {
 
 func TestPayloadClampsSizeAndBatch(t *testing.T) {
 	p := NewPayload(0, 0, 0)
-	cmds := p.Transactions()
+	cmds := p.GetTransactions()
 	if len(cmds) != 1 {
 		t.Fatalf("len(cmds) = %d, want 1", len(cmds))
 	}
@@ -45,7 +45,7 @@ func TestPayloadThrottled(t *testing.T) {
 	deadline := start.Add(150 * time.Millisecond)
 	total := 0
 	for time.Now().Before(deadline) {
-		total += len(p.Transactions())
+		total += len(p.GetTransactions())
 	}
 	elapsed := time.Since(start)
 
@@ -53,7 +53,7 @@ func TestPayloadThrottled(t *testing.T) {
 	// call and the elapsed measurement.
 	max := int(elapsed.Seconds()*rate) + 2
 	if total > max {
-		t.Errorf("throttled Transactions handed out %d commands over %v at rate %d/s, want <= %d", total, elapsed, rate, max)
+		t.Errorf("throttled GetTransactions handed out %d commands over %v at rate %d/s, want <= %d", total, elapsed, rate, max)
 	}
 }
 
@@ -61,7 +61,7 @@ func TestPayloadThrottled(t *testing.T) {
 // the same length and content, by value rather than pointer identity.
 func TestPayloadCommandsAreUniform(t *testing.T) {
 	p := NewPayload(16, 5, 0)
-	cmds := p.Transactions()
+	cmds := p.GetTransactions()
 	for i, c := range cmds {
 		if len(c) != len(cmds[0]) {
 			t.Errorf("command %d: length = %d, want %d", i, len(c), len(cmds[0]))

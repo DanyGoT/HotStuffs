@@ -17,7 +17,7 @@ type Core struct {
 	crypto Crypto
 	net    Transport
 
-	transactions func() [][]byte
+	mempool MemPool
 
 	ledger    *MemLedger
 	tree      *BlockTree
@@ -29,7 +29,7 @@ type Core struct {
 }
 
 // Config is everything a Core needs. Every field is required except
-// Transactions, WindowSize and ExcludeSize.
+// MemPool, WindowSize and ExcludeSize.
 type Config struct {
 	ID         uint32
 	Validators []uint32
@@ -41,13 +41,13 @@ type Config struct {
 
 	// Lock is the lock the caller serializes Core calls with. The round
 	// timer's callback runs on its own goroutine and takes it. The transport,
-	// the ledger's OnCommit and Transactions run under it, so they must not
+	// the ledger's OnCommit and the mempool run under it, so they must not
 	// call back into the core or take it again.
 	Lock sync.Locker
 
-	// Transactions supplies the payload for a leader's proposal (paper 3.6).
+	// MemPool supplies the payload for a leader's proposal (paper 3.6).
 	// Nil proposes empty blocks, which still commits the pipeline below them.
-	Transactions func() [][]byte
+	MemPool MemPool
 
 	// WindowSize is how far back LeaderElection reads the active set;
 	// ExcludeSize is how many recent commit authors it holds out, which the
@@ -102,7 +102,7 @@ func New(cfg Config) *Core {
 		crypto: cfg.Crypto,
 		net:    cfg.Transport,
 
-		transactions: cfg.Transactions,
+		mempool: cfg.MemPool,
 
 		ledger:    cfg.Ledger,
 		tree:      tree,
@@ -286,8 +286,8 @@ func (c *Core) processNewRoundEvent(lastTC *diempb.TimeoutCert) {
 		return
 	}
 	var txns [][]byte
-	if c.transactions != nil {
-		txns = c.transactions()
+	if c.mempool != nil {
+		txns = c.mempool.GetTransactions()
 	}
 	b := c.tree.GenerateBlock(txns, round)
 	sig, err := sign(c.crypto, c.id, b.GetId())

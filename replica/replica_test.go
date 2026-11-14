@@ -70,7 +70,7 @@ func cluster(t *testing.T, n int, round time.Duration, dial ...gorums.DialOption
 			ID:           id,
 			Key:          privs[id],
 			Keys:         pubs,
-			Transactions: NewPayload(32, 4, 0).Transactions,
+			MemPool:      NewPayload(32, 4, 0),
 			RoundTimeout: round,
 			Measure:      benchkit.Options{Interval: round},
 			Server:       srvs[i],

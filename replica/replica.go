@@ -30,8 +30,8 @@ type Config struct {
 	Key  *ecdsa.PrivateKey
 	Keys map[uint32]*ecdsa.PublicKey
 
-	// Transactions supplies a leader's payload; nil proposes empty blocks.
-	Transactions func() [][]byte
+	// MemPool supplies a leader's payload; nil proposes empty blocks.
+	MemPool diem.MemPool
 
 	RoundTimeout    time.Duration
 	MaxRoundTimeout time.Duration
@@ -96,15 +96,15 @@ func New(cfg Config) *Replica {
 		Network:  cfg.Network,
 	})
 	r.core = diem.New(diem.Config{
-		ID:           cfg.ID,
-		Validators:   validators,
-		Ledger:       ledger,
-		Crypto:       signer,
-		Transport:    stamper{r.net, r.proposed},
-		Clock:        diem.SystemClock{},
-		Backoff:      diem.NewBackoff(cfg.RoundTimeout, cfg.MaxRoundTimeout, backoffFactor),
-		Lock:         &r.mu,
-		Transactions: cfg.Transactions,
+		ID:         cfg.ID,
+		Validators: validators,
+		Ledger:     ledger,
+		Crypto:     signer,
+		Transport:  stamper{r.net, r.proposed},
+		Clock:      diem.SystemClock{},
+		Backoff:    diem.NewBackoff(cfg.RoundTimeout, cfg.MaxRoundTimeout, backoffFactor),
+		Lock:       &r.mu,
+		MemPool:    cfg.MemPool,
 	})
 	return r
 }

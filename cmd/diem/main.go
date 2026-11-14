@@ -165,7 +165,7 @@ func (o *options) runLocal(n int) error {
 		id := uint32(i + 1)
 		reps[i] = replica.New(replica.Config{
 			ID: id, Key: privs[id], Keys: pubs,
-			Transactions: o.transactions(),
+			MemPool:      o.mempool(),
 			RoundTimeout: o.viewDuration,
 			Measure:      o.std.Options(),
 			Server:       srvs[i],
@@ -220,7 +220,7 @@ func (o *options) runOne() error {
 	return o.runAll(len(addrs), []*replica.Replica{replica.New(replica.Config{
 		ID: id, Peers: peers, Listen: self,
 		Key: priv, Keys: pubs,
-		Transactions: o.transactions(),
+		MemPool:      o.mempool(),
 		RoundTimeout: o.viewDuration,
 		Measure:      o.std.Options(),
 		DialOptions:  o.dialOptions(),
@@ -306,12 +306,12 @@ func (o *options) addresses() ([]string, error) {
 	return addrs, nil
 }
 
-// transactions is the leader's payload source; nil proposes empty blocks.
-func (o *options) transactions() func() [][]byte {
+// mempool is the leader's payload source; nil proposes empty blocks.
+func (o *options) mempool() diem.MemPool {
 	if o.std.Payload <= 0 {
 		return nil
 	}
-	return replica.NewPayload(o.std.Payload, o.std.Workers, o.std.Rate).Transactions
+	return replica.NewPayload(o.std.Payload, o.std.Workers, o.std.Rate)
 }
 
 // GORUMS: NewLocalServers and any real dial need explicit transport
