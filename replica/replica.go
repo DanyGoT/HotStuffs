@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DanyGoT/diembft/crypto"
 	"github.com/DanyGoT/diembft/diem"
+	"github.com/DanyGoT/diembft/diemcrypto"
 	"github.com/DanyGoT/diembft/diemnet"
 	"github.com/DanyGoT/diembft/proto/diempb"
 	"github.com/relab/gorums/benchkit"
@@ -85,7 +85,7 @@ func New(cfg Config) *Replica {
 	}
 
 	validators := slices.Sorted(maps.Keys(cfg.Keys))
-	signer := crypto.New(cfg.Key, cfg.Keys)
+	signer := diemcrypto.New(cfg.Key, cfg.Keys)
 	r := &Replica{id: cfg.ID, proposed: map[uint64]time.Time{}, measure: cfg.Measure, started: make(chan struct{})}
 	ledger := diem.NewMemLedger()
 	ledger.OnCommit = r.commit

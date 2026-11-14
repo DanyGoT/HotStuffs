@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/diembft/crypto"
 	"github.com/DanyGoT/diembft/diem"
+	"github.com/DanyGoT/diembft/diemcrypto"
 	"github.com/DanyGoT/diembft/proto/diempb"
 	"github.com/relab/gorums"
 	"google.golang.org/grpc"
@@ -32,18 +32,18 @@ var testKeys = map[int]struct {
 }{}
 
 // signer is replica id's signer in a group of n.
-func signer(t *testing.T, id uint32, n int) *crypto.Signer {
+func signer(t *testing.T, id uint32, n int) *diemcrypto.Signer {
 	t.Helper()
 	ks, ok := testKeys[n]
 	if !ok {
-		privs, pubs, err := crypto.GenerateKeys(n)
+		privs, pubs, err := diemcrypto.GenerateKeys(n)
 		if err != nil {
 			t.Fatalf("GenerateKeys: %v", err)
 		}
 		ks.privs, ks.pubs = privs, pubs
 		testKeys[n] = ks
 	}
-	return crypto.New(ks.privs[id], ks.pubs)
+	return diemcrypto.New(ks.privs[id], ks.pubs)
 }
 
 // recv reads one input off q, failing the test after a generous timeout rather
@@ -143,7 +143,7 @@ func localServers(t *testing.T, n int, c diem.Crypto) ([]*gorums.Server, *atomic
 }
 
 // sig signs digest as signer and wraps the result as a proto Signature.
-func sig(t *testing.T, signer *crypto.Signer, id uint32, digest []byte) *diempb.Signature {
+func sig(t *testing.T, signer *diemcrypto.Signer, id uint32, digest []byte) *diempb.Signature {
 	t.Helper()
 	raw, err := signer.Sign(digest)
 	if err != nil {
@@ -594,11 +594,11 @@ func (n *node) log() []*diempb.Block {
 // a real ECDSA key.
 func newCluster(t *testing.T, n int) []*node {
 	t.Helper()
-	privs, pubs, err := crypto.GenerateKeys(n)
+	privs, pubs, err := diemcrypto.GenerateKeys(n)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
-	srvs, rejected, stopSrvs := localServers(t, n, crypto.New(nil, pubs))
+	srvs, rejected, stopSrvs := localServers(t, n, diemcrypto.New(nil, pubs))
 	t.Cleanup(stopSrvs)
 	validators := make([]uint32, n)
 	for i := range n {
@@ -609,7 +609,7 @@ func newCluster(t *testing.T, n int) []*node {
 	for i := range n {
 		id := uint32(i + 1)
 		nd := &node{id: id}
-		signer := crypto.New(privs[id], pubs)
+		signer := diemcrypto.New(privs[id], pubs)
 		ledger := diem.NewMemLedger()
 		ledger.OnCommit = func(b *diempb.Block) { nd.commits = append(nd.commits, b) }
 		nd.tr = New(Config{

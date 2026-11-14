@@ -15,7 +15,7 @@
 - =highest_vote_round= is not persisted. =diem/pacemaker.go:LocalTimeoutRound= has
   no =save_consensus_state()=, so a restarted replica can vote twice in a round.
 - Keys are seeded. Without =-keys=, every replica derives the same insecure key
-  set (=crypto/ecdsa.go:SeededKeys=).
+  set (=diemcrypto/ecdsa.go:SeededKeys=).
 - No equivocation evidence. Conflicting messages from one replica are not
   recorded or reported.
 - No verified sender identity. Gorums does not tell a handler which peer sent a

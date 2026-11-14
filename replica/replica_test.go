@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DanyGoT/diembft/crypto"
 	"github.com/DanyGoT/diembft/diem"
+	"github.com/DanyGoT/diembft/diemcrypto"
 	"github.com/DanyGoT/diembft/diemnet"
 	"github.com/DanyGoT/diembft/proto/diempb"
 	"github.com/relab/gorums"
@@ -50,12 +50,12 @@ func waitFor(timeout time.Duration, pred func() bool) bool {
 func cluster(t *testing.T, n int, round time.Duration, dial ...gorums.DialOption) ([]*Replica, func(context.Context)) {
 	t.Helper()
 
-	privs, pubs, err := crypto.GenerateKeys(n)
+	privs, pubs, err := diemcrypto.GenerateKeys(n)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
 	rejected := new(atomic.Uint64)
-	verify := diemnet.VerifyInterceptor(diem.NewVerifier(crypto.New(nil, pubs), diem.QuorumSize(n)), rejected)
+	verify := diemnet.VerifyInterceptor(diem.NewVerifier(diemcrypto.New(nil, pubs), diem.QuorumSize(n)), rejected)
 	srvs, stopSrvs, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(append([]gorums.DialOption{insecureDial}, dial...)...),
 		gorums.WithLocalServerOptions(gorums.WithServerInterceptors(verify)))
 	if err != nil {
@@ -215,7 +215,7 @@ func TestResultCountsOwnBlocks(t *testing.T) {
 // -fault-kill-after from, closes only once every peer is connected: not while
 // one is down, and once the whole cluster is up.
 func TestStartedWaitsForPeers(t *testing.T) {
-	privs, pubs, err := crypto.GenerateKeys(2)
+	privs, pubs, err := diemcrypto.GenerateKeys(2)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestRunStopsWhileASendWaits(t *testing.T) {
 // a peer list of a different size would give this replica a quorum its peers
 // do not share.
 func TestNewRejectsMismatchedPeersAndKeys(t *testing.T) {
-	privs, pubs, err := crypto.GenerateKeys(4)
+	privs, pubs, err := diemcrypto.GenerateKeys(4)
 	if err != nil {
 		t.Fatalf("GenerateKeys: %v", err)
 	}

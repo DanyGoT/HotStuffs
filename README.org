@@ -25,7 +25,7 @@ needs =nix develop=.
   replica serializes every call into it.
 - =diemnet/= sends and receives its messages over Gorums.
 - =proto/diempb/= defines the messages.
-- =crypto/= signs and verifies them.
+- =diemcrypto/= signs and verifies them.
 - =replica/= puts the pieces together into a running replica.
 - =cmd/diem/= is the program.
 - =scripts/= runs benchmarks on the UiS machines.
