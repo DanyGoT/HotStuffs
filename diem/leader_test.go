@@ -91,7 +91,7 @@ func TestElectReputationLeaderExcludesRecentAuthorsAndPicksFromWindow(t *testing
 	ledger := NewMemLedger()
 	// b1 extends genesis; its author (5) must be excluded from the pick even
 	// though 5 also appears among the window's signers.
-	b1 := NewBlock(5, 1, nil, bareQC(GenesisBlock().GetId(), 0))
+	b1 := NewBlock(5, 1, nil, bareQC(genesisBlock.GetId(), 0))
 	ledger.Speculate(b1)
 	ledger.Commit(b1.GetId())
 
@@ -113,7 +113,7 @@ func TestElectReputationLeaderExcludesRecentAuthorsAndPicksFromWindow(t *testing
 func TestElectReputationLeaderFallsBackWhenHistoryTooShort(t *testing.T) {
 	ledger := NewMemLedger() // only genesis is committed
 	le := &LeaderElection{ledger: ledger, windowSize: 5, excludeSize: 1}
-	qc := qcWith(voteInfo(nil, 1, GenesisBlock().GetId(), 0), nil)
+	qc := qcWith(voteInfo(nil, 1, genesisBlock.GetId(), 0), nil)
 
 	if _, ok := le.electReputationLeader(qc); ok {
 		t.Fatal("electReputationLeader found a candidate from a history shorter than the window, want a fallback")
@@ -140,7 +140,7 @@ func TestPickIsDeterministicAndInRange(t *testing.T) {
 // independent of the order its own validators slice was constructed with.
 func TestUpdateLeadersAgreesAcrossReplicas(t *testing.T) {
 	ledger := NewMemLedger()
-	b1 := NewBlock(5, 1, nil, bareQC(GenesisBlock().GetId(), 0))
+	b1 := NewBlock(5, 1, nil, bareQC(genesisBlock.GetId(), 0))
 	ledger.Speculate(b1)
 	ledger.Commit(b1.GetId())
 

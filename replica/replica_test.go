@@ -141,7 +141,7 @@ func TestClusterCommitsIdenticalPrefix(t *testing.T) {
 		}
 	}
 	for i, log := range logs {
-		if !bytes.Equal(log[0].ParentID(), diem.GenesisBlock().GetId()) {
+		if !bytes.Equal(log[0].ParentID(), diem.GenesisQC().BlockID()) {
 			t.Errorf("replica %d: the first commit does not extend genesis", i+1)
 		}
 		for k := 1; k < len(log); k++ {

@@ -33,9 +33,6 @@ func zeroQC(id []byte) *diempb.QuorumCert {
 	}.Build()
 }
 
-// GenesisBlock returns the same immutable block on every call.
-func GenesisBlock() *diempb.Block { return genesisBlock }
-
 // GenesisQC returns the certificate a round-1 proposal extends. Its signature
 // set is empty: genesis is trusted, not certified.
 func GenesisQC() *diempb.QuorumCert { return genesisQC }

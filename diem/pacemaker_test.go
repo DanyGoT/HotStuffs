@@ -78,8 +78,8 @@ func TestAdvanceRoundQCBelowCurrentRoundChangesNothing(t *testing.T) {
 	if pm.CurrentRound() != 5 {
 		t.Fatalf("CurrentRound() = %d, want 5 (unchanged)", pm.CurrentRound())
 	}
-	if pm.LastRoundTC() == nil {
-		t.Fatal("LastRoundTC was cleared despite AdvanceRoundQC returning false")
+	if pm.lastRoundTC == nil {
+		t.Fatal("lastRoundTC was cleared despite AdvanceRoundQC returning false")
 	}
 }
 
@@ -88,8 +88,8 @@ func TestAdvanceRoundQCAtOrAboveEntersNextRoundAndClearsTC(t *testing.T) {
 	if !pm.AdvanceRoundTC(makeTC(2)) {
 		t.Fatal("setup: AdvanceRoundTC(round 2) should have entered round 3")
 	}
-	if pm.LastRoundTC() == nil {
-		t.Fatal("setup: LastRoundTC not recorded")
+	if pm.lastRoundTC == nil {
+		t.Fatal("setup: lastRoundTC not recorded")
 	}
 
 	// A QC at exactly the current round is "at or above".
@@ -100,8 +100,8 @@ func TestAdvanceRoundQCAtOrAboveEntersNextRoundAndClearsTC(t *testing.T) {
 	if pm.CurrentRound() != 4 {
 		t.Fatalf("CurrentRound() = %d, want 4", pm.CurrentRound())
 	}
-	if pm.LastRoundTC() != nil {
-		t.Fatal("LastRoundTC was not cleared by AdvanceRoundQC")
+	if pm.lastRoundTC != nil {
+		t.Fatal("lastRoundTC was not cleared by AdvanceRoundQC")
 	}
 }
 
@@ -137,8 +137,8 @@ func TestAdvanceRoundTCEntersNextRoundAndRecordsTC(t *testing.T) {
 	if pm.CurrentRound() != 3 {
 		t.Fatalf("CurrentRound() = %d, want 3", pm.CurrentRound())
 	}
-	if pm.LastRoundTC() != tc {
-		t.Fatal("LastRoundTC was not recorded")
+	if pm.lastRoundTC != tc {
+		t.Fatal("lastRoundTC was not recorded")
 	}
 }
 

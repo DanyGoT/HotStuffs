@@ -26,7 +26,7 @@ func newTestVerifier() *Verifier {
 // same parent — one entry in the pending tree and one speculated state each.
 func TestVerifyRejectsNonCanonicalCertificates(t *testing.T) {
 	v := newTestVerifier()
-	vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
+	vi := voteInfo(genesisBlock.GetId(), 1, nil, 0)
 
 	t.Run("QC signatures out of signer order", func(t *testing.T) {
 		qc := makeQC(vi, nil, 1, 2, 3)
@@ -127,7 +127,7 @@ func TestVerifyQC(t *testing.T) {
 	})
 
 	t.Run("vote info not bound to the ledger commit info is rejected", func(t *testing.T) {
-		vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
+		vi := voteInfo(genesisBlock.GetId(), 1, nil, 0)
 		qc := makeQC(vi, nil, 1, 2, 3)
 		qc.GetVoteInfo().SetRound(2) // tamper after the commit hash was computed over Round: 1
 		if v.VerifyQC(qc) {
@@ -136,18 +136,18 @@ func TestVerifyQC(t *testing.T) {
 	})
 
 	t.Run("commit over a round gap is rejected", func(t *testing.T) {
-		vi := voteInfo(hashOf(2), 3, GenesisBlock().GetId(), 1)
+		vi := voteInfo(hashOf(2), 3, genesisBlock.GetId(), 1)
 		if v.VerifyQC(makeQC(vi, hashOf(9), 1, 2, 3)) {
 			t.Error("VerifyQC = true for a commit whose block does not directly follow its parent")
 		}
-		vi = voteInfo(hashOf(2), 2, GenesisBlock().GetId(), 1)
+		vi = voteInfo(hashOf(2), 2, genesisBlock.GetId(), 1)
 		if !v.VerifyQC(makeQC(vi, hashOf(9), 1, 2, 3)) {
 			t.Error("VerifyQC = false for a 2-chain commit, want true")
 		}
 	})
 
 	t.Run("too few signatures is rejected", func(t *testing.T) {
-		vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
+		vi := voteInfo(genesisBlock.GetId(), 1, nil, 0)
 		qc := makeQC(vi, nil, 1, 2) // quorum is 3
 		if v.VerifyQC(qc) {
 			t.Error("VerifyQC = true below quorum, want false")
@@ -321,7 +321,7 @@ func TestVerifyQCRejectsForgedGenesis(t *testing.T) {
 // aggregator fills in with any name it likes.
 func TestVerifyQCRejectsUnattributedAuthor(t *testing.T) {
 	v := newTestVerifier()
-	vi := voteInfo(GenesisBlock().GetId(), 1, nil, 0)
+	vi := voteInfo(genesisBlock.GetId(), 1, nil, 0)
 
 	if !v.VerifyQC(makeQC(vi, nil, 1, 2, 3)) {
 		t.Fatal("VerifyQC = false for a quorum its author signed, want true")
@@ -425,7 +425,7 @@ func TestVerifyRejectsMalformed(t *testing.T) {
 			Sig: signAs(1, commit.Digest()),
 		}.Build()
 	}
-	good := voteInfo(hashOf(1), 1, GenesisBlock().GetId(), 0)
+	good := voteInfo(hashOf(1), 1, genesisBlock.GetId(), 0)
 	withInfo := func(mut func(*diempb.VoteInfo)) *diempb.VoteMsg {
 		vi := proto.Clone(good).(*diempb.VoteInfo)
 		mut(vi)
@@ -479,14 +479,14 @@ func TestVerifyRejectsMalformed(t *testing.T) {
 		}
 	})
 	t.Run("quorum cert with a short hash", func(t *testing.T) {
-		qc := makeQC(voteInfo(GenesisBlock().GetId(), 1, nil, 0), nil, 1, 2, 3)
+		qc := makeQC(voteInfo(genesisBlock.GetId(), 1, nil, 0), nil, 1, 2, 3)
 		qc.GetVoteInfo().SetExecStateId(short)
 		if v.VerifyQC(qc) {
 			t.Error("VerifyQC = true for a certificate with a short exec state id")
 		}
 	})
 	t.Run("quorum cert with a nil signature", func(t *testing.T) {
-		qc := makeQC(voteInfo(GenesisBlock().GetId(), 1, nil, 0), nil, 1, 2, 3)
+		qc := makeQC(voteInfo(genesisBlock.GetId(), 1, nil, 0), nil, 1, 2, 3)
 		qc.SetSignatures(append(qc.GetSignatures()[:2:2], nil))
 		if v.VerifyQC(qc) {
 			t.Error("VerifyQC = true with a nil signature in the set")

@@ -57,10 +57,6 @@ func NewPacemaker(quorum, faulty int, clock Clock, dur *Backoff, lock sync.Locke
 // CurrentRound is the round this replica is in.
 func (p *Pacemaker) CurrentRound() uint64 { return p.currentRound }
 
-// LastRoundTC is the certificate that justified entry to the current round, or
-// nil when a QC justified it.
-func (p *Pacemaker) LastRoundTC() *diempb.TimeoutCert { return p.lastRoundTC }
-
 // Stop disarms the round timer.
 func (p *Pacemaker) Stop() {
 	p.epoch++

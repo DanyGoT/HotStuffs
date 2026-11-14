@@ -38,7 +38,7 @@ func committingSetup(id uint32) (tree *BlockTree, ledger *MemLedger, b1, b2 *die
 	b1 = NewBlock(id, 1, nil, GenesisQC())
 	tree.ExecuteAndInsert(b1)
 
-	qc1 := qcWith(voteInfo(b1.GetId(), 1, GenesisBlock().GetId(), 0), nil)
+	qc1 := qcWith(voteInfo(b1.GetId(), 1, genesisBlock.GetId(), 0), nil)
 	b2 = NewBlock(id, 2, nil, qc1)
 	tree.ExecuteAndInsert(b2)
 
@@ -67,7 +67,7 @@ func TestProcessQCNilIsNoop(t *testing.T) {
 
 func TestProcessQCNonCommittingRaisesHighQCOnly(t *testing.T) {
 	tree, _ := newTestTree(1)
-	qc := qcWith(voteInfo(hashOf(0x01), 1, GenesisBlock().GetId(), 0), nil)
+	qc := qcWith(voteInfo(hashOf(0x01), 1, genesisBlock.GetId(), 0), nil)
 
 	tree.ProcessQC(qc)
 
@@ -133,7 +133,7 @@ func TestExecuteAndInsertMakesBlockRetrievable(t *testing.T) {
 
 func TestProcessVoteBelowQuorumReturnsNil(t *testing.T) {
 	tree, _ := newTestTree(1)
-	vi := voteInfo(hashOf(0x10), 1, GenesisBlock().GetId(), 0)
+	vi := voteInfo(hashOf(0x10), 1, genesisBlock.GetId(), 0)
 	commit := commitInfo(nil, vi)
 
 	if qc := tree.ProcessVote(castVote(1, vi, commit)); qc != nil {
@@ -146,7 +146,7 @@ func TestProcessVoteBelowQuorumReturnsNil(t *testing.T) {
 
 func TestProcessVoteAtQuorumReturnsQC(t *testing.T) {
 	tree, _ := newTestTree(1)
-	vi := voteInfo(hashOf(0x11), 1, GenesisBlock().GetId(), 0)
+	vi := voteInfo(hashOf(0x11), 1, genesisBlock.GetId(), 0)
 	commit := commitInfo(nil, vi)
 
 	tree.ProcessVote(castVote(1, vi, commit))
@@ -167,7 +167,7 @@ func TestProcessVoteAtQuorumReturnsQC(t *testing.T) {
 // would let one sender reach quorum alone.
 func TestProcessVoteDuplicateSenderDoesNotCountTwice(t *testing.T) {
 	tree, _ := newTestTree(1)
-	vi := voteInfo(hashOf(0x12), 1, GenesisBlock().GetId(), 0)
+	vi := voteInfo(hashOf(0x12), 1, genesisBlock.GetId(), 0)
 	commit := commitInfo(nil, vi)
 
 	for range 3 {
@@ -196,7 +196,7 @@ func (unsignableCrypto) Sign([]byte) ([]byte, error) { return nil, errors.New("n
 func TestProcessVoteWithoutAnAuthorSignatureEmitsNoQC(t *testing.T) {
 	ledger := NewMemLedger()
 	tree := NewBlockTree(1, testQuorum, ledger, unsignableCrypto{newTestSigner(testN)})
-	vi := voteInfo(hashOf(0x15), 1, GenesisBlock().GetId(), 0)
+	vi := voteInfo(hashOf(0x15), 1, genesisBlock.GetId(), 0)
 	commit := commitInfo(nil, vi)
 
 	for _, sender := range []uint32{1, 2, 3} {
@@ -222,7 +222,7 @@ func TestProcessVoteBoundsBucketsPerSignerPerRound(t *testing.T) {
 		vi := diempb.VoteInfo_builder{
 			Id:          hashOf(0x16),
 			Round:       round,
-			ParentId:    GenesisBlock().GetId(),
+			ParentId:    genesisBlock.GetId(),
 			ExecStateId: hashOf(byte(i)),
 		}.Build()
 		commit := commitInfo(nil, vi)
@@ -237,7 +237,7 @@ func TestProcessVoteBoundsBucketsPerSignerPerRound(t *testing.T) {
 
 func TestProcessVoteDisagreeingLedgerCommitInfoDoesNotCombine(t *testing.T) {
 	tree, _ := newTestTree(1)
-	vi := voteInfo(hashOf(0x13), 1, GenesisBlock().GetId(), 0)
+	vi := voteInfo(hashOf(0x13), 1, genesisBlock.GetId(), 0)
 	commitA := commitInfo(nil, vi)
 	commitB := commitInfo(hashOf(0x01), vi)
 
@@ -251,7 +251,7 @@ func TestProcessVoteDisagreeingLedgerCommitInfoDoesNotCombine(t *testing.T) {
 
 func TestProcessVoteQCSignaturesSortedBySigner(t *testing.T) {
 	tree, _ := newTestTree(1)
-	vi := voteInfo(hashOf(0x14), 1, GenesisBlock().GetId(), 0)
+	vi := voteInfo(hashOf(0x14), 1, genesisBlock.GetId(), 0)
 	commit := commitInfo(nil, vi)
 
 	tree.ProcessVote(castVote(3, vi, commit))
@@ -313,13 +313,13 @@ func TestProcessQCCommitPrunesBelowRootAndAbandonedBranches(t *testing.T) {
 	fork := NewBlock(1, 1, [][]byte{{0xFF}}, GenesisQC())
 	tree.ExecuteAndInsert(fork)
 
-	qc1 := qcWith(voteInfo(b1.GetId(), 1, GenesisBlock().GetId(), 0), nil)
+	qc1 := qcWith(voteInfo(b1.GetId(), 1, genesisBlock.GetId(), 0), nil)
 	b2 := NewBlock(1, 2, nil, qc1)
 	tree.ExecuteAndInsert(b2)
 
 	// A vote bucket at round 1 that never reaches quorum; it must be dropped
 	// along with the pruned round.
-	forkVoteInfo := voteInfo(fork.GetId(), 1, GenesisBlock().GetId(), 0)
+	forkVoteInfo := voteInfo(fork.GetId(), 1, genesisBlock.GetId(), 0)
 	forkCommit := commitInfo(nil, forkVoteInfo)
 	tree.ProcessVote(castVote(1, forkVoteInfo, forkCommit))
 

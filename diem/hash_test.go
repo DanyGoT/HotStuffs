@@ -180,7 +180,7 @@ func TestDigestsAreStable(t *testing.T) {
 		{"QuorumCert.SigsDigest", qc.SigsDigest(), "2384fbfc0a4460d7d9ae078019a60bc8ac338b61edf869ec72b7430f6b9bf380"},
 		{"Block.ComputeID", blockID(2, 8, [][]byte{[]byte("x"), nil}, qc), "111d3a701459d73825df094c27e11bc3ec91f7a81f4fc248c5f8d55233573fcb"},
 		{"ExecuteHash", ExecuteHash(hashOf(5), [][]byte{[]byte("p")}), "d631f2329d3a9190db1eac55dd53aab5ad9987a4987060c43373c0ed9201131a"},
-		{"genesis block id", GenesisBlock().GetId(), "d4b5493ae4acf6cddd60faa01f9719424a318148f4bd46c56cefb26d141bedff"},
+		{"genesis block id", genesisBlock.GetId(), "d4b5493ae4acf6cddd60faa01f9719424a318148f4bd46c56cefb26d141bedff"},
 	}
 	for _, tt := range tests {
 		if got := hex.EncodeToString(tt.got); got != tt.want {
