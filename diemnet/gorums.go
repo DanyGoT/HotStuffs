@@ -142,10 +142,6 @@ func (t *Transport) Stop() {
 	t.wg.Wait()
 }
 
-// Addr is the address the server listens on, which is how a ":0" listener
-// reports the port it got.
-func (t *Transport) Addr() string { return t.srv.Addr() }
-
 // WaitForPeers blocks until every configured peer has connected, or ctx is done.
 func (t *Transport) WaitForPeers(ctx context.Context) error {
 	want := t.srv.PeerConfig().Size()
