@@ -188,9 +188,6 @@ func (r *Replica) Started() <-chan struct{} { return r.started }
 // ID is this replica's identity.
 func (r *Replica) ID() uint32 { return r.id }
 
-// Addr is the address the transport listens on.
-func (r *Replica) Addr() string { return r.net.Addr() }
-
 // Log is the committed blocks, in commit order. It is safe to call from any
 // goroutine.
 func (r *Replica) Log() []*diempb.Block {
