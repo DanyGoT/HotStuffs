@@ -1,4 +1,4 @@
-package crypto
+package diemcrypto
 
 import (
 	"crypto/ecdsa"

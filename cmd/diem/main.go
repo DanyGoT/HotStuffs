@@ -32,8 +32,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/DanyGoT/diembft/crypto"
 	"github.com/DanyGoT/diembft/diem"
+	"github.com/DanyGoT/diembft/diemcrypto"
 	"github.com/DanyGoT/diembft/diemnet"
 	"github.com/DanyGoT/diembft/replica"
 	"github.com/relab/gorums"
@@ -126,11 +126,11 @@ func (o *options) writeKeys() error {
 	if n == 0 || o.keys == "" {
 		return errors.New("-gen-keys needs -keys and either -local N or -remotes")
 	}
-	privs, _, err := crypto.GenerateKeys(n)
+	privs, _, err := diemcrypto.GenerateKeys(n)
 	if err != nil {
 		return err
 	}
-	if err := crypto.WriteKeys(o.keys, privs); err != nil {
+	if err := diemcrypto.WriteKeys(o.keys, privs); err != nil {
 		return err
 	}
 	slog.Info("wrote keys", "dir", o.keys, "replicas", n)
@@ -147,12 +147,12 @@ func (o *options) runLocal(n int) error {
 	if err != nil {
 		return err
 	}
-	privs, pubs, err := crypto.GenerateKeys(n)
+	privs, pubs, err := diemcrypto.GenerateKeys(n)
 	if err != nil {
 		return err
 	}
 	rejected := new(atomic.Uint64)
-	verify := diemnet.VerifyInterceptor(diem.NewVerifier(crypto.New(nil, pubs), diem.QuorumSize(n)), rejected)
+	verify := diemnet.VerifyInterceptor(diem.NewVerifier(diemcrypto.New(nil, pubs), diem.QuorumSize(n)), rejected)
 	srvs, stop, err := gorums.NewLocalServers(n, gorums.WithLocalDialOptions(o.dialOptions()...),
 		gorums.WithLocalServerOptions(gorums.WithServerInterceptors(verify)))
 	if err != nil {
@@ -179,13 +179,13 @@ func (o *options) runLocal(n int) error {
 // replica computes alike is used only when -insecure-seeded-keys asks for it.
 func (o *options) replicaKeys(id uint32, n int) (*ecdsa.PrivateKey, map[uint32]*ecdsa.PublicKey, error) {
 	if o.keys != "" {
-		return crypto.ReadKeys(o.keys, id)
+		return diemcrypto.ReadKeys(o.keys, id)
 	}
 	if !o.insecureSeeded {
 		return nil, nil, errors.New("no -keys: pass -keys DIR, or -insecure-seeded-keys to use public-seed keys")
 	}
 	slog.Warn("using insecure seeded keys")
-	privs, pubs, err := crypto.SeededKeys(n)
+	privs, pubs, err := diemcrypto.SeededKeys(n)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -1,7 +1,7 @@
-// Package crypto implements ECDSA over P-256 signing and verification of
+// Package diemcrypto implements ECDSA over P-256 signing and verification of
 // digests, which is what diem.Crypto asks for. It depends on the standard
 // library alone.
-package crypto
+package diemcrypto
 
 import (
 	"crypto/ecdsa"

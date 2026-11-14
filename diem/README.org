@@ -87,7 +87,7 @@ the rest being compromised.
 This package declares four, all in =seams.go=, and each has a real
 implementation and a test one: =MemPool= (=replica.Payload= and =fifoPool=)
 supplies a leader's payload, =Transport= (=diemnet= and the sim's in-memory
-network) is the hand-off out of the core, =Crypto= (=crypto= and
+network) is the hand-off out of the core, =Crypto= (=diemcrypto= and
 =testSigner=) signs and verifies digests as plain bytes, with the signer id as an
 argument — it knows nothing of the message types, and checking a certificate is
 =verify.go:verifyCert= in =diem=, and =Clock= (=SystemClock= and =fakeClock=)
