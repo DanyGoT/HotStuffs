@@ -28,13 +28,6 @@ func NewSafety(id uint32, verify *Verifier, crypto Crypto, ledger *MemLedger, tr
 	return &Safety{id: id, verify: verify, crypto: crypto, ledger: ledger, tree: tree}
 }
 
-// HighestVoteRound is the last round this replica voted or timed out in.
-func (s *Safety) HighestVoteRound() uint64 { return s.highestVoteRound }
-
-// HighestQCRound is the highest certified round this replica has endorsed by
-// voting over it.
-func (s *Safety) HighestQCRound() uint64 { return s.highestQCRound }
-
 // DeclinedMissingAncestor counts the votes withheld because the block's
 // ancestry was not yet speculated. It is monotonic, and it measures what a gap
 // costs before block sync fills it: see MemLedger.Speculate.

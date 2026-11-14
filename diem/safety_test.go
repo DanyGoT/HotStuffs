@@ -249,11 +249,11 @@ func TestMakeVote(t *testing.T) {
 		if vote == nil {
 			t.Fatal("MakeVote = nil, want a vote")
 		}
-		if f.safety.HighestVoteRound() != 2 {
-			t.Errorf("HighestVoteRound = %d, want 2", f.safety.HighestVoteRound())
+		if f.safety.highestVoteRound != 2 {
+			t.Errorf("HighestVoteRound = %d, want 2", f.safety.highestVoteRound)
 		}
-		if f.safety.HighestQCRound() != 1 {
-			t.Errorf("HighestQCRound = %d, want 1", f.safety.HighestQCRound())
+		if f.safety.highestQCRound != 1 {
+			t.Errorf("HighestQCRound = %d, want 1", f.safety.highestQCRound)
 		}
 		if !bytes.Equal(vote.GetLedgerCommitInfo().GetVoteInfoHash(), vote.GetVoteInfo().Hash()) {
 			t.Error("LedgerCommitInfo.VoteInfoHash does not match vote.VoteInfo.Hash()")
@@ -276,8 +276,8 @@ func TestMakeTimeout(t *testing.T) {
 		if to == nil {
 			t.Fatal("MakeTimeout = nil, want a timeout")
 		}
-		if f.safety.HighestVoteRound() != 1 {
-			t.Errorf("HighestVoteRound = %d, want 1", f.safety.HighestVoteRound())
+		if f.safety.highestVoteRound != 1 {
+			t.Errorf("HighestVoteRound = %d, want 1", f.safety.highestVoteRound)
 		}
 		digest := diempb.TimeoutDigest(to.GetRound(), to.GetHighQc().Round())
 		if !verifySig(f.crypto, digest, to.GetSig()) {
