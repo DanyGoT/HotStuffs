@@ -175,7 +175,7 @@ func TestSafeToTimeout(t *testing.T) {
 func TestCommitStateIDCandidate(t *testing.T) {
 	t.Run("round gap returns zero", func(t *testing.T) {
 		f := newSafetyFixture(1)
-		qc := bareQC(GenesisBlock().GetId(), 0)
+		qc := bareQC(genesisBlock.GetId(), 0)
 		if got := f.safety.commitStateIDCandidate(5, qc); !bytes.Equal(got, zeroHash[:]) {
 			t.Errorf("commitStateIDCandidate = %x, want zero", got)
 		}
@@ -237,7 +237,7 @@ func TestMakeVote(t *testing.T) {
 		state1 := f.ledger.Speculate(block1)
 		voteInfo1 := diempb.VoteInfo_builder{
 			Id: block1.GetId(), Round: 1,
-			ParentId: GenesisBlock().GetId(), ParentRound: 0,
+			ParentId: genesisBlock.GetId(), ParentRound: 0,
 			ExecStateId: state1,
 		}.Build()
 		qc1 := makeQC(voteInfo1, nil, 1, 2, 3)
